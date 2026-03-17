@@ -26,6 +26,8 @@ router.get('/:id',
   menuController.getMenuItemById
 );
 
+router.get('/', menuController.getMenuItems);
+
 router.post('/',
   checkPermission('manage_menu'),
   menuController.createMenuItem
