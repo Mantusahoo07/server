@@ -1,3 +1,16 @@
+// --- ADD THIS AT THE VERY TOP OF server.js ---
+process.on('uncaughtException', (err) => {
+  console.error('💥 UNCAUGHT EXCEPTION:', err);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('💥 UNHANDLED REJECTION at:', promise, 'reason:', reason);
+  process.exit(1);
+});
+// --- END OF ADDED CODE ---
+
+// ... rest of your server.js code ...
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
