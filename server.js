@@ -10,7 +10,6 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 // --- END OF ADDED CODE ---
 
-// ... rest of your server.js code ...
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -21,7 +20,7 @@ const rateLimit = require('express-rate-limit');
 const socketIO = require('socket.io');
 const http = require('http');
 const path = require('path');
-const jwt = require('jsonwebtoken'); // 👈 IMPORTANT: Add this missing import
+const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
 // Import routes
@@ -44,7 +43,10 @@ const logger = require('./utils/logger');
 const app = express();
 const server = http.createServer(app);
 
-// 👇 FIXED: CORS configuration for Socket.IO
+// ✅ CRITICAL FIX FOR RENDER: Tell Express to trust the proxy
+// This ensures rate limiting works correctly with real IPs
+app.set('trust proxy', 1); // Trust first proxy
+
 const io = socketIO(server, {
   cors: {
     origin: process.env.CLIENT_URL || 'http://localhost:3000',
@@ -52,25 +54,31 @@ const io = socketIO(server, {
     credentials: true,
     allowedHeaders: ['Authorization', 'Content-Type']
   },
-  transports: ['websocket', 'polling'] // 👈 Add transport options
+  transports: ['websocket', 'polling']
 });
 
-// Rate limiting - 👇 APPLY to all routes, not just /api
+// Rate limiting - with IP fix for Render
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100, // limit each IP to 100 requests per windowMs
   standardHeaders: true,
   legacyHeaders: false,
-  message: 'Too many requests from this IP, please try again later.'
+  message: 'Too many requests from this IP, please try again later.',
+  keyGenerator: (req) => {
+    // Get the real IP from X-Forwarded-For header
+    return req.headers['x-forwarded-for']?.split(',').shift() || 
+           req.socket.remoteAddress || 
+           req.ip;
+  }
 });
 
-// Middleware - 👇 FIXED order
+// Middleware
 app.use(helmet({
-  crossOriginResourcePolicy: { policy: "cross-origin" } // 👈 Allow cross-origin for static files
+  crossOriginResourcePolicy: { policy: "cross-origin" }
 }));
 app.use(compression());
 
-// 👇 FIXED: More permissive CORS for development
+// CORS configuration
 const corsOptions = {
   origin: function (origin, callback) {
     const allowedOrigins = [
@@ -78,11 +86,10 @@ const corsOptions = {
       'http://localhost:3000',
       'http://localhost:5000',
       'http://127.0.0.1:3000',
-      'http://192.168.1.100:3000', // Add your local IP if needed
-      'https://your-frontend.onrender.com' // Add your frontend URL when deployed
+      'https://server-uvyi.onrender.com',
+      'https://your-frontend.onrender.com'
     ].filter(Boolean);
     
-    // Allow requests with no origin (like mobile apps or curl)
     if (!origin || allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
@@ -109,7 +116,7 @@ app.use(morgan('combined', {
 // Apply rate limiter to all routes
 app.use(limiter);
 
-// Static files - 👇 Ensure directories exist
+// Static files
 const fs = require('fs');
 ['uploads', 'reports'].forEach(dir => {
   const dirPath = path.join(__dirname, dir);
@@ -121,14 +128,14 @@ const fs = require('fs');
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/reports', express.static(path.join(__dirname, 'reports')));
 
-// 👇 FIXED: Database connection with better error handling
+// Database connection
 const connectDB = async () => {
   try {
     const conn = await mongoose.connect(process.env.MONGODB_URI, {
       useNewUrlParser: true,
       useUnifiedTopology: true,
-      serverSelectionTimeoutMS: 5000, // Timeout after 5s
-      socketTimeoutMS: 45000, // Close sockets after 45s
+      serverSelectionTimeoutMS: 5000,
+      socketTimeoutMS: 45000,
     });
     
     logger.info(`✅ MongoDB Connected: ${conn.connection.host}`);
@@ -137,7 +144,6 @@ const connectDB = async () => {
   } catch (err) {
     logger.error('❌ MongoDB connection error:', err);
     console.error('❌ MongoDB connection error:', err);
-    // Don't exit immediately, retry connection
     setTimeout(connectDB, 5000);
   }
 };
@@ -147,7 +153,7 @@ connectDB();
 // Make io accessible to routes
 app.set('io', io);
 
-// 👇 FIXED: WebSocket connection with better error handling
+// WebSocket connection
 io.on('connection', (socket) => {
   logger.info('🟢 New client connected:', socket.id);
   console.log('🟢 New client connected:', socket.id);
@@ -203,7 +209,7 @@ io.on('connection', (socket) => {
   });
 });
 
-// 👇 FIXED: Routes with better organization
+// Routes
 app.get('/', (req, res) => {
   res.json({ 
     message: 'Restaurant POS API', 
@@ -222,7 +228,7 @@ app.get('/', (req, res) => {
   });
 });
 
-// Health check - 👈 Keep this BEFORE auth middleware
+// Health check
 app.get('/health', (req, res) => {
   const dbState = mongoose.connection.readyState;
   const dbStatus = {
@@ -232,10 +238,15 @@ app.get('/health', (req, res) => {
     3: 'disconnecting'
   };
   
+  // Log the real IP to verify rate limiting fix
+  const realIP = req.headers['x-forwarded-for']?.split(',').shift() || req.socket.remoteAddress;
+  console.log(`Health check from IP: ${realIP}`);
+  
   res.json({ 
     status: 'OK', 
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
+    yourIP: realIP,
     database: {
       state: dbStatus[dbState],
       readyState: dbState
@@ -262,7 +273,7 @@ app.use('/api/*', (req, res) => {
   });
 });
 
-// Error handling middleware - 👈 This should be last
+// Error handling middleware
 app.use(errorHandler);
 
 // 404 handler for all other routes
@@ -287,12 +298,10 @@ async function gracefulShutdown(signal) {
   logger.info(`📥 Received ${signal}, starting graceful shutdown...`);
   console.log(`📥 Received ${signal}, starting graceful shutdown...`);
   
-  // Close server first - stop accepting new connections
   server.close(async () => {
     logger.info('🛑 HTTP server closed');
     console.log('🛑 HTTP server closed');
     
-    // Close database connection
     try {
       await mongoose.connection.close();
       logger.info('🗄️  Database connection closed');
@@ -304,7 +313,6 @@ async function gracefulShutdown(signal) {
     process.exit(0);
   });
   
-  // Force shutdown after timeout
   setTimeout(() => {
     logger.error('⚠️ Could not close connections in time, forcefully shutting down');
     process.exit(1);
@@ -314,14 +322,13 @@ async function gracefulShutdown(signal) {
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
-// Handle uncaught exceptions
+// Handle uncaught exceptions (already at top, but keeping for completeness)
 process.on('uncaughtException', (err) => {
   logger.error('❌ Uncaught Exception:', err);
   console.error('❌ Uncaught Exception:', err);
   gracefulShutdown('UNCAUGHT_EXCEPTION');
 });
 
-// Handle unhandled promise rejections
 process.on('unhandledRejection', (err) => {
   logger.error('❌ Unhandled Rejection:', err);
   console.error('❌ Unhandled Rejection:', err);
