@@ -58,19 +58,19 @@ const io = socketIO(server, {
 });
 
 // Rate limiting - with IP fix for Render
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: 'Too many requests from this IP, please try again later.',
-  keyGenerator: (req) => {
+//const limiter = rateLimit({
+//  windowMs: 15 * 60 * 1000, // 15 minutes
+//max: 100, // limit each IP to 100 requests per windowMs
+//  standardHeaders: true,
+//  legacyHeaders: false,
+//  message: 'Too many requests from this IP, please try again later.',
+//  keyGenerator: (req) => {
     // Get the real IP from X-Forwarded-For header
-    return req.headers['x-forwarded-for']?.split(',').shift() || 
-           req.socket.remoteAddress || 
-           req.ip;
-  }
-});
+//    return req.headers['x-forwarded-for']?.split(',').shift() || 
+ //          req.socket.remoteAddress || 
+//           req.ip;
+//  }
+//});
 
 // Middleware
 app.use(helmet({
@@ -114,7 +114,7 @@ app.use(morgan('combined', {
 }));
 
 // Apply rate limiter to all routes
-app.use(limiter);
+//app.use(limiter);
 
 // Static files
 const fs = require('fs');
