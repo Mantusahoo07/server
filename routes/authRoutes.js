@@ -20,7 +20,7 @@ const registerValidation = [
 ];
 
 // Routes
-router.post('/login', loginValidation, authController.login);
+router.post('/login', authController.login);
 router.post('/register', registerValidation, authController.register);
 router.post('/refresh', authController.refreshToken);
 router.post('/logout', authenticate, authController.logout);
