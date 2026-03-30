@@ -13,6 +13,7 @@ import menuRoutes from './routes/menu.js';
 import reportRoutes from './routes/reports.js';
 import paymentRoutes from './routes/payments.js';
 import { limiter } from './middleware/rateLimiter.js';
+import categoryRoutes from './routes/categories.js';
 
 dotenv.config();
 
@@ -46,6 +47,7 @@ app.use((req, res, next) => {
   req.io = io;
   next();
 });
+app.use('/api/categories', categoryRoutes);
 
 // Routes
 app.use('/api/auth', authRoutes);
