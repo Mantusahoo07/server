@@ -54,6 +54,25 @@ app.use('/api/menu', menuRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/payments', paymentRoutes);
 
+
+// Add this near your other routes
+app.get('/', (req, res) => {
+  res.json({
+    status: 'online',
+    message: 'POS Server API is running',
+    endpoints: {
+      health: '/health',
+      orders: '/api/orders',
+      menu: '/api/menu',
+      auth: '/api/auth',
+      payments: '/api/payments',
+      reports: '/api/reports'
+    },
+    timestamp: new Date()
+  });
+});
+
+
 // Health check endpoint for Render
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'healthy', timestamp: new Date() });
