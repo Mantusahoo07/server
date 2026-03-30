@@ -18,6 +18,6 @@ services:
       - key: CLIENT_URL
         value: https://your-frontend-url.com
     buildCommand: npm install
-    startCommand: node index.js
+    startCommand: node index.js   # ← Change this from server.js to index.js
     healthCheckPath: /health
     autoDeploy: true
