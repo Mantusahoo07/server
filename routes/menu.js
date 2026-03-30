@@ -11,13 +11,14 @@ import { authenticate, authorize, checkPermission } from '../middleware/auth.js'
 
 const router = express.Router();
 
-router.use(authenticate);
-
+// Make GET endpoints public (no authentication required)
 router.get('/', getMenuItems);
 router.get('/categories', getCategories);
-router.post('/', authorize('admin', 'manager'), checkPermission('canEditMenu'), createMenuItem);
-router.put('/:id', authorize('admin', 'manager'), checkPermission('canEditMenu'), updateMenuItem);
-router.delete('/:id', authorize('admin'), deleteMenuItem);
-router.post('/bulk-update', authorize('admin', 'manager'), bulkUpdateAvailability);
+
+// All other endpoints require authentication
+router.post('/', authenticate, authorize('admin', 'manager'), checkPermission('canEditMenu'), createMenuItem);
+router.put('/:id', authenticate, authorize('admin', 'manager'), checkPermission('canEditMenu'), updateMenuItem);
+router.delete('/:id', authenticate, authorize('admin'), deleteMenuItem);
+router.post('/bulk-update', authenticate, authorize('admin', 'manager'), bulkUpdateAvailability);
 
 export default router;
