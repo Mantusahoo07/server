@@ -15,7 +15,7 @@ import paymentRoutes from './routes/payments.js';
 import { limiter } from './middleware/rateLimiter.js';
 import categoryRoutes from './routes/categories.js';
 import tableRoutes from './routes/tables.js';
-
+import settingRoutes from './routes/settings.js';
 
 
 dotenv.config();
@@ -61,6 +61,7 @@ app.use('/api/menu', menuRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/tables', tableRoutes);
+app.use('/api/settings', settingRoutes);
 
 
 // Add this near your other routes
