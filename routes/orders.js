@@ -1,48 +1,7 @@
 import express from 'express';
-import mongoose from 'mongoose';
+import Order from '../models/Order.js';
 
 const router = express.Router();
-
-// Order Schema
-const orderSchema = new mongoose.Schema({
-  orderNumber: Number,
-  items: [{
-    id: String,
-    name: String,
-    quantity: Number,
-    price: Number,
-    specialInstructions: String,
-    status: { type: String, default: 'pending' },
-    completedAt: Date
-  }],
-  subtotal: Number,
-  tax: Number,
-  total: Number,
-  status: {
-    type: String,
-    enum: ['pending', 'accepted', 'preparing', 'completed', 'cancelled'],
-    default: 'pending'
-  },
-  orderType: { type: String, default: 'dine-in' },
-  tableNumber: String,
-  customer: {
-    name: String,
-    phone: String,
-    email: String
-  },
-  payment: {
-    method: String,
-    status: String,
-    amount: Number,
-    transactionId: String,
-    timestamp: Date
-  },
-  timerStart: { type: Date, default: Date.now },
-  createdAt: { type: Date, default: Date.now },
-  updatedAt: { type: Date, default: Date.now }
-});
-
-const Order = mongoose.model('Order', orderSchema, 'orders');
 
 // Get all orders
 router.get('/', async (req, res) => {
@@ -71,10 +30,10 @@ router.post('/', async (req, res) => {
     const order = new Order(req.body);
     await order.save();
     
-    // Emit socket event for real-time update
+    // Emit socket event
     const io = req.app.get('io');
     if (io) {
-      console.log('📡 Emitting new order via socket:', order.orderNumber);
+      console.log('📡 New order:', order.orderNumber);
       io.emit('new-order-received', order);
       io.emit('order-updated', order);
     }
@@ -97,10 +56,8 @@ router.patch('/:id/status', async (req, res) => {
     );
     if (!order) return res.status(404).json({ error: 'Order not found' });
     
-    // Emit socket event
     const io = req.app.get('io');
     if (io) {
-      console.log('📡 Emitting order status update:', order.orderNumber, status);
       io.emit('order-updated', order);
       if (status === 'accepted') io.emit('order-accepted', order._id);
       if (status === 'completed') io.emit('order-completed', order._id);
@@ -108,7 +65,6 @@ router.patch('/:id/status', async (req, res) => {
     
     res.json(order);
   } catch (error) {
-    console.error('Error updating order status:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -130,21 +86,13 @@ router.patch('/:id/items/:itemId', async (req, res) => {
     
     await order.save();
     
-    // Emit socket event
     const io = req.app.get('io');
     if (io) {
-      console.log('📡 Emitting item status update:', item.name, status);
       io.emit('order-updated', order);
-      io.emit('item-status-updated', { 
-        orderId: req.params.id, 
-        itemId: req.params.itemId, 
-        status 
-      });
     }
     
     res.json(order);
   } catch (error) {
-    console.error('Error updating item status:', error);
     res.status(500).json({ error: error.message });
   }
 });
