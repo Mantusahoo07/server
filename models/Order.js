@@ -1,16 +1,23 @@
 import mongoose from 'mongoose';
 
+const orderItemSchema = new mongoose.Schema({
+  id: { type: String, required: true },
+  name: String,
+  quantity: Number,
+  price: Number,
+  specialInstructions: String,
+  status: { type: String, default: 'pending', enum: ['pending', 'preparing', 'completed'] },
+  completedAt: Date,
+  isModified: { type: Boolean, default: false },
+  isRemoved: { type: Boolean, default: false },
+  modifiedAt: Date,
+  removedAt: Date,
+  oldQuantity: Number
+});
+
 const orderSchema = new mongoose.Schema({
   orderNumber: Number,
-  items: [{
-    id: { type: String, required: true },
-    name: String,
-    quantity: Number,
-    price: Number,
-    specialInstructions: String,
-    status: { type: String, default: 'pending', enum: ['pending', 'preparing', 'completed'] },
-    completedAt: Date
-  }],
+  items: [orderItemSchema],
   subtotal: Number,
   tax: Number,
   serviceCharge: { type: Number, default: 0 },
@@ -27,34 +34,17 @@ const orderSchema = new mongoose.Schema({
   },
   deliveryPlatform: {
     type: String,
-    default: null,
-    // Remove enum validation - allow any string or null
-    validate: {
-      validator: function(v) {
-        // Only validate if the order type is delivery
-        if (this.orderType === 'delivery') {
-          return ['home', 'zomato', 'swiggy'].includes(v);
-        }
-        return true; // Always valid for non-delivery orders
-      },
-      message: 'Invalid delivery platform'
-    }
-  },
-  deliveryAddress: {
-    type: String,
+    enum: ['home', 'zomato', 'swiggy'],
     default: null
   },
-  tableNumber: {
-    type: Number,
-    min: 1,
-    max: 20,
-    default: null
-  },
+  deliveryAddress: String,
+  tableNumber: { type: Number, min: 1, max: 20, default: null },
   customer: {
     name: { type: String, default: 'Walk-In' },
     phone: String,
     email: String
   },
+  hasModifications: { type: Boolean, default: false },
   isAdditionalOrder: { type: Boolean, default: false },
   parentOrderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Order', default: null },
   payment: {
@@ -70,15 +60,6 @@ const orderSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now },
   completedAt: { type: Date, default: null },
   updatedAt: { type: Date, default: Date.now }
-});
-
-// Pre-save middleware to handle deliveryPlatform
-orderSchema.pre('save', function(next) {
-  // If order is not delivery, set deliveryPlatform to undefined
-  if (this.orderType !== 'delivery') {
-    this.deliveryPlatform = undefined;
-  }
-  next();
 });
 
 const Order = mongoose.models.Order || mongoose.model('Order', orderSchema);
