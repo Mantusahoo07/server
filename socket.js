@@ -1,89 +1,41 @@
-import { v4 as uuidv4 } from 'uuid';
+import { Server } from 'socket.io';
 
 export const setupSocketHandlers = (io) => {
   io.on('connection', (socket) => {
-    console.log('New client connected:', socket.id);
+    console.log('🟢 New client connected:', socket.id);
 
-    // Send initial data
-    socket.emit('initial-data', {
-      menu: global.menuItems,
-      orders: global.orders,
-      outOfStock: global.outOfStockItems
+    // Send initial connection confirmation
+    socket.emit('connected', { message: 'Connected to server', socketId: socket.id });
+
+    // Handle new order from POS
+    socket.on('new-order', (order) => {
+      console.log('📦 New order received via socket:', order.orderNumber);
+      // Broadcast to all connected clients (especially kitchen display)
+      io.emit('new-order-received', order);
+      io.emit('order-updated', order);
     });
 
-    // New order from POS
-    socket.on('new-order', (orderData) => {
-      const newOrder = {
-        id: uuidv4(),
-        ...orderData,
-        status: 'pending',
-        timestamp: new Date(),
-        timerStart: Date.now(),
-        items: orderData.items.map(item => ({
-          ...item,
-          status: 'pending'
-        }))
-      };
-      
-      global.orders.push(newOrder);
-      io.emit('order-received', newOrder);
-      
-      // Notify kitchen with sound/vibration trigger
-      socket.broadcast.emit('kitchen-new-order', newOrder);
-    });
-
-    // Accept order in kitchen
+    // Handle order acceptance from kitchen
     socket.on('accept-order', (orderId) => {
-      const order = global.orders.find(o => o.id === orderId);
-      if (order) {
-        order.status = 'accepted';
-        order.acceptedAt = new Date();
-        io.emit('order-updated', order);
-      }
+      console.log('✅ Order accepted:', orderId);
+      io.emit('order-accepted', orderId);
     });
 
-    // Update item status in kitchen
+    // Handle item status update from kitchen
     socket.on('update-item-status', ({ orderId, itemId, status }) => {
-      const order = global.orders.find(o => o.id === orderId);
-      if (order) {
-        const item = order.items.find(i => i.id === itemId);
-        if (item) {
-          item.status = status;
-          item.completedAt = status === 'completed' ? new Date() : null;
-          
-          // Check if all items completed
-          const allCompleted = order.items.every(i => i.status === 'completed');
-          if (allCompleted) {
-            order.status = 'completed';
-          }
-          
-          io.emit('order-updated', order);
-        }
-      }
+      console.log('📝 Item status updated:', { orderId, itemId, status });
+      io.emit('item-status-updated', { orderId, itemId, status });
     });
 
-    // Mark item out of stock
-    socket.on('mark-out-of-stock', (itemId) => {
-      const menuItem = global.menuItems.find(i => i.id === itemId);
-      if (menuItem) {
-        menuItem.available = false;
-        global.outOfStockItems.push(itemId);
-        io.emit('item-out-of-stock', itemId);
-      }
+    // Handle order completion
+    socket.on('complete-order', (orderId) => {
+      console.log('🎉 Order completed:', orderId);
+      io.emit('order-completed', orderId);
     });
 
-    // Mark item back in stock
-    socket.on('mark-in-stock', (itemId) => {
-      const menuItem = global.menuItems.find(i => i.id === itemId);
-      if (menuItem) {
-        menuItem.available = true;
-        global.outOfStockItems = global.outOfStockItems.filter(id => id !== itemId);
-        io.emit('item-in-stock', itemId);
-      }
-    });
-
+    // Handle disconnection
     socket.on('disconnect', () => {
-      console.log('Client disconnected:', socket.id);
+      console.log('🔴 Client disconnected:', socket.id);
     });
   });
 };
