@@ -27,10 +27,18 @@ const orderSchema = new mongoose.Schema({
   },
   deliveryPlatform: {
     type: String,
-    enum: ['home', 'zomato', 'swiggy'],
     default: null,
-    // Remove the required flag and allow null
-    sparse: true
+    // Remove enum validation - allow any string or null
+    validate: {
+      validator: function(v) {
+        // Only validate if the order type is delivery
+        if (this.orderType === 'delivery') {
+          return ['home', 'zomato', 'swiggy'].includes(v);
+        }
+        return true; // Always valid for non-delivery orders
+      },
+      message: 'Invalid delivery platform'
+    }
   },
   deliveryAddress: {
     type: String,
@@ -64,8 +72,9 @@ const orderSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now }
 });
 
-// Add a pre-save middleware to remove deliveryPlatform for non-delivery orders
+// Pre-save middleware to handle deliveryPlatform
 orderSchema.pre('save', function(next) {
+  // If order is not delivery, set deliveryPlatform to undefined
   if (this.orderType !== 'delivery') {
     this.deliveryPlatform = undefined;
   }
