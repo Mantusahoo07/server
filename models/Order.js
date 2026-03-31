@@ -1,10 +1,10 @@
 import mongoose from 'mongoose';
 
 const orderItemSchema = new mongoose.Schema({
-  id: { type: String, required: true },
-  name: String,
-  quantity: Number,
-  price: Number,
+  id: { type: String, required: true },  // This should be required
+  name: { type: String, required: true },
+  quantity: { type: Number, default: 1 },
+  price: { type: Number, required: true },
   specialInstructions: String,
   status: { type: String, default: 'pending', enum: ['pending', 'preparing', 'completed'] },
   completedAt: Date,
