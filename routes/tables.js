@@ -13,23 +13,37 @@ router.get('/', async (req, res) => {
   }
 });
 
-// Get available tables
-router.get('/available', async (req, res) => {
+// Add new table
+router.post('/', async (req, res) => {
   try {
-    const tables = await Table.find({ status: 'available' }).sort({ tableNumber: 1 });
-    res.json(tables);
+    const { tableNumber, capacity, section, status } = req.body;
+    
+    const existingTable = await Table.findOne({ tableNumber });
+    if (existingTable) {
+      return res.status(400).json({ error: 'Table number already exists' });
+    }
+    
+    const table = new Table({
+      tableNumber,
+      capacity: capacity || 4,
+      section: section || 'Main Hall',
+      status: status || 'available'
+    });
+    
+    await table.save();
+    res.status(201).json(table);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// Update table status
-router.patch('/:tableNumber/status', async (req, res) => {
+// Update table
+router.patch('/:tableNumber', async (req, res) => {
   try {
-    const { status, orderId } = req.body;
+    const { capacity, section, status } = req.body;
     const table = await Table.findOneAndUpdate(
       { tableNumber: req.params.tableNumber },
-      { status, currentOrderId: orderId, updatedAt: new Date() },
+      { capacity, section, status, updatedAt: new Date() },
       { new: true }
     );
     if (!table) return res.status(404).json({ error: 'Table not found' });
@@ -39,7 +53,18 @@ router.patch('/:tableNumber/status', async (req, res) => {
   }
 });
 
-// Initialize tables (run once)
+// Delete table
+router.delete('/:tableNumber', async (req, res) => {
+  try {
+    const table = await Table.findOneAndDelete({ tableNumber: req.params.tableNumber });
+    if (!table) return res.status(404).json({ error: 'Table not found' });
+    res.json({ message: 'Table deleted' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Initialize tables (20 tables)
 router.post('/initialize', async (req, res) => {
   try {
     await Table.deleteMany({});
@@ -53,7 +78,7 @@ router.post('/initialize', async (req, res) => {
       });
     }
     await Table.insertMany(tables);
-    res.json({ message: 'Tables initialized', count: tables.length });
+    res.json({ message: '20 tables initialized', tables });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
