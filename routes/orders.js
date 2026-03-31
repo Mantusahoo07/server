@@ -29,18 +29,9 @@ router.post('/', async (req, res) => {
   try {
     const orderData = { ...req.body };
     
-    // Clean up the data
     if (orderData.orderType !== 'delivery') {
-      // Remove deliveryPlatform completely for non-delivery orders
       delete orderData.deliveryPlatform;
     }
-    
-    // Ensure deliveryPlatform is valid for delivery orders
-    if (orderData.orderType === 'delivery' && !orderData.deliveryPlatform) {
-      orderData.deliveryPlatform = 'home'; // Default to home delivery
-    }
-    
-    console.log('Creating order:', orderData);
     
     const order = new Order(orderData);
     await order.save();
@@ -59,21 +50,151 @@ router.post('/', async (req, res) => {
   }
 });
 
-// Update order status - FIXED to save completedAt
+// Add item to order
+router.post('/:id/items', async (req, res) => {
+  try {
+    const { item } = req.body;
+    const order = await Order.findById(req.params.id);
+    
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    
+    // Check if item already exists
+    const existingItem = order.items.find(i => i.id === item.id);
+    if (existingItem) {
+      existingItem.quantity += item.quantity;
+      existingItem.isModified = true;
+      existingItem.modifiedAt = new Date();
+    } else {
+      order.items.push({
+        ...item,
+        isModified: true,
+        modifiedAt: new Date(),
+        originalStatus: item.status
+      });
+    }
+    
+    // Update totals
+    order.subtotal = order.items.reduce((sum, i) => sum + (i.price * i.quantity), 0);
+    order.tax = order.subtotal * (order.taxRate / 100);
+    order.serviceCharge = order.subtotal * (order.serviceChargeRate / 100);
+    order.total = order.subtotal + order.tax + order.serviceCharge;
+    order.updatedAt = new Date();
+    order.hasModifications = true;
+    
+    await order.save();
+    
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('order-updated', order);
+      io.emit('order-item-added', { orderId: order._id, item });
+    }
+    
+    res.json(order);
+  } catch (error) {
+    console.error('Error adding item:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Remove item from order
+router.delete('/:id/items/:itemId', async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.id);
+    
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    
+    const itemIndex = order.items.findIndex(i => i.id === req.params.itemId);
+    if (itemIndex === -1) {
+      return res.status(404).json({ error: 'Item not found' });
+    }
+    
+    // Mark as removed
+    const removedItem = order.items[itemIndex];
+    removedItem.isRemoved = true;
+    removedItem.removedAt = new Date();
+    order.items.splice(itemIndex, 1);
+    
+    // Update totals
+    order.subtotal = order.items.reduce((sum, i) => sum + (i.price * i.quantity), 0);
+    order.tax = order.subtotal * (order.taxRate / 100);
+    order.serviceCharge = order.subtotal * (order.serviceChargeRate / 100);
+    order.total = order.subtotal + order.tax + order.serviceCharge;
+    order.updatedAt = new Date();
+    order.hasModifications = true;
+    
+    await order.save();
+    
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('order-updated', order);
+      io.emit('order-item-removed', { orderId: order._id, itemId: req.params.itemId });
+    }
+    
+    res.json(order);
+  } catch (error) {
+    console.error('Error removing item:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update item quantity
+router.patch('/:id/items/:itemId', async (req, res) => {
+  try {
+    const { quantity } = req.body;
+    const order = await Order.findById(req.params.id);
+    
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    
+    const item = order.items.find(i => i.id === req.params.itemId);
+    if (!item) {
+      return res.status(404).json({ error: 'Item not found' });
+    }
+    
+    const oldQuantity = item.quantity;
+    item.quantity = quantity;
+    item.isModified = true;
+    item.modifiedAt = new Date();
+    item.oldQuantity = oldQuantity;
+    
+    // Update totals
+    order.subtotal = order.items.reduce((sum, i) => sum + (i.price * i.quantity), 0);
+    order.tax = order.subtotal * (order.taxRate / 100);
+    order.serviceCharge = order.subtotal * (order.serviceChargeRate / 100);
+    order.total = order.subtotal + order.tax + order.serviceCharge;
+    order.updatedAt = new Date();
+    order.hasModifications = true;
+    
+    await order.save();
+    
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('order-updated', order);
+    }
+    
+    res.json(order);
+  } catch (error) {
+    console.error('Error updating quantity:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update order status
 router.patch('/:id/status', async (req, res) => {
   try {
     const { status } = req.body;
-    console.log(`Updating order ${req.params.id} to status: ${status}`);
-    
     const updateData = { 
       status, 
       updatedAt: new Date() 
     };
     
-    // If status is being set to completed, also set completedAt timestamp
     if (status === 'completed') {
       updateData.completedAt = new Date();
-      console.log(`✅ Order ${req.params.id} completed at:`, updateData.completedAt);
     }
     
     const order = await Order.findByIdAndUpdate(
@@ -86,7 +207,6 @@ router.patch('/:id/status', async (req, res) => {
       return res.status(404).json({ error: 'Order not found' });
     }
     
-    // Emit socket event
     const io = req.app.get('io');
     if (io) {
       io.emit('order-updated', order);
@@ -102,47 +222,26 @@ router.patch('/:id/status', async (req, res) => {
 });
 
 // Update item status
-router.patch('/:id/items/:itemId', async (req, res) => {
+router.patch('/:id/items/:itemId/status', async (req, res) => {
   try {
     const { status } = req.body;
-    console.log(`🔄 Updating item ${req.params.itemId} to status: ${status}`);
-    
     const order = await Order.findById(req.params.id);
+    
     if (!order) {
-      console.log('❌ Order not found:', req.params.id);
       return res.status(404).json({ error: 'Order not found' });
     }
     
-    const itemIndex = order.items.findIndex(item => item.id === req.params.itemId);
-    if (itemIndex === -1) {
-      console.log('❌ Item with ID not found:', req.params.itemId);
-      const itemByMongoId = order.items.find(item => item._id && item._id.toString() === req.params.itemId);
-      if (itemByMongoId) {
-        console.log('Found item by MongoDB _id');
-        itemByMongoId.status = status;
-        if (status === 'completed') {
-          itemByMongoId.completedAt = new Date();
-        }
-        await order.save();
-        console.log('✅ Item status updated successfully via MongoDB _id');
-        
-        const io = req.app.get('io');
-        if (io) {
-          io.emit('order-updated', order);
-        }
-        
-        return res.json(order);
-      }
+    const item = order.items.find(i => i.id === req.params.itemId);
+    if (!item) {
       return res.status(404).json({ error: 'Item not found' });
     }
     
-    order.items[itemIndex].status = status;
+    item.status = status;
     if (status === 'completed') {
-      order.items[itemIndex].completedAt = new Date();
+      item.completedAt = new Date();
     }
     
     await order.save();
-    console.log('✅ Item status updated successfully');
     
     const io = req.app.get('io');
     if (io) {
@@ -151,7 +250,7 @@ router.patch('/:id/items/:itemId', async (req, res) => {
     
     res.json(order);
   } catch (error) {
-    console.error('❌ Error updating item status:', error);
+    console.error('Error updating item status:', error);
     res.status(500).json({ error: error.message });
   }
 });
