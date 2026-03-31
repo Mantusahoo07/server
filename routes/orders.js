@@ -55,25 +55,41 @@ router.post('/', async (req, res) => {
 router.post('/:id/items', async (req, res) => {
   try {
     const { item } = req.body;
+    
+    // Validate required fields
+    if (!item || !item.id) {
+      console.error('Invalid item data:', item);
+      return res.status(400).json({ error: 'Item ID is required' });
+    }
+    
     const order = await Order.findById(req.params.id);
     
     if (!order) {
       return res.status(404).json({ error: 'Order not found' });
     }
     
+    // Create item with default values if missing
+    const newItem = {
+      id: item.id,
+      name: item.name || 'Unknown Item',
+      quantity: item.quantity || 1,
+      price: item.price || 0,
+      specialInstructions: item.specialInstructions || '',
+      status: 'pending',
+      isModified: true,
+      modifiedAt: new Date()
+    };
+    
+    console.log('Adding item to order:', newItem);
+    
     // Check if item already exists
-    const existingItem = order.items.find(i => i.id === item.id);
+    const existingItem = order.items.find(i => i.id === newItem.id);
     if (existingItem) {
-      existingItem.quantity += item.quantity;
+      existingItem.quantity += newItem.quantity;
       existingItem.isModified = true;
       existingItem.modifiedAt = new Date();
     } else {
-      order.items.push({
-        ...item,
-        isModified: true,
-        modifiedAt: new Date(),
-        originalStatus: item.status
-      });
+      order.items.push(newItem);
     }
     
     // Update totals
@@ -89,7 +105,7 @@ router.post('/:id/items', async (req, res) => {
     const io = req.app.get('io');
     if (io) {
       io.emit('order-updated', order);
-      io.emit('order-item-added', { orderId: order._id, item });
+      io.emit('order-item-added', { orderId: order._id, item: newItem });
     }
     
     res.json(order);
