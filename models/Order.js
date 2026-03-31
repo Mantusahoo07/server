@@ -34,10 +34,8 @@ const orderSchema = new mongoose.Schema({
   },
   deliveryPlatform: {
     type: String,
-    enum: ['home', 'zomato', 'swiggy'],
-    default: null,
-    // Remove required validation
-    required: false
+    default: null
+    // Remove enum validation completely
   },
   deliveryAddress: {
     type: String,
@@ -69,7 +67,6 @@ const orderSchema = new mongoose.Schema({
 
 // Pre-save middleware to clean up deliveryPlatform
 orderSchema.pre('save', function(next) {
-  // If order is not delivery, remove deliveryPlatform
   if (this.orderType !== 'delivery') {
     this.deliveryPlatform = undefined;
   }
