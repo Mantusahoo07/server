@@ -66,31 +66,55 @@ router.patch('/:id/status', async (req, res) => {
   }
 });
 
-// Update item status
+// Update item status - Make sure this route exists and is correct
 router.patch('/:id/items/:itemId', async (req, res) => {
   try {
     const { status } = req.body;
     console.log(`🔄 Updating item ${req.params.itemId} to status: ${status}`);
     
+    // Find the order
     const order = await Order.findById(req.params.id);
     if (!order) {
+      console.log('❌ Order not found:', req.params.id);
       return res.status(404).json({ error: 'Order not found' });
     }
     
-    // Find item by its id field (menu item ID)
+    // Find the item by its 'id' field (menu item ID)
     const itemIndex = order.items.findIndex(item => item.id === req.params.itemId);
     if (itemIndex === -1) {
+      console.log('❌ Item with ID not found:', req.params.itemId);
+      // Also try finding by MongoDB _id as fallback
+      const itemByMongoId = order.items.find(item => item._id && item._id.toString() === req.params.itemId);
+      if (itemByMongoId) {
+        console.log('Found item by MongoDB _id');
+        itemByMongoId.status = status;
+        if (status === 'completed') {
+          itemByMongoId.completedAt = new Date();
+        }
+        await order.save();
+        console.log('✅ Item status updated successfully via MongoDB _id');
+        
+        const io = req.app.get('io');
+        if (io) {
+          io.emit('order-updated', order);
+        }
+        
+        return res.json(order);
+      }
       return res.status(404).json({ error: 'Item not found' });
     }
     
+    // Update item status
     order.items[itemIndex].status = status;
     if (status === 'completed') {
       order.items[itemIndex].completedAt = new Date();
     }
     
+    // Save the order
     await order.save();
     console.log('✅ Item status updated successfully');
     
+    // Emit socket event
     const io = req.app.get('io');
     if (io) {
       io.emit('order-updated', order);
