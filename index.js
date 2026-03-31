@@ -12,7 +12,7 @@ import orderRoutes from './routes/orders.js';
 import menuRoutes from './routes/menu.js';
 import reportRoutes from './routes/reports.js';
 import paymentRoutes from './routes/payments.js';
-import { limiter } from './middleware/rateLimiter.js';
+//import { limiter } from './middleware/rateLimiter.js';
 import categoryRoutes from './routes/categories.js';
 import tableRoutes from './routes/tables.js';
 import settingRoutes from './routes/settings.js';
@@ -59,7 +59,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Rate limiting
-app.use(limiter);
+// app.use(limiter);
 
 // Make io accessible to routes via req
 app.use((req, res, next) => {
