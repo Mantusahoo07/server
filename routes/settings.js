@@ -7,13 +7,13 @@ const router = express.Router();
 router.get('/', async (req, res) => {
   try {
     const settings = await Setting.find({});
-    // Convert to object format
     const settingsObj = {};
     settings.forEach(setting => {
       settingsObj[setting.key] = setting.value;
     });
     res.json(settingsObj);
   } catch (error) {
+    console.error('Error fetching settings:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -22,14 +22,16 @@ router.get('/', async (req, res) => {
 router.get('/:key', async (req, res) => {
   try {
     const setting = await Setting.findOne({ key: req.params.key });
-    if (!setting) return res.status(404).json({ error: 'Setting not found' });
+    if (!setting) {
+      return res.status(404).json({ error: 'Setting not found' });
+    }
     res.json({ [setting.key]: setting.value });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// Update or create settings
+// Update or create multiple settings
 router.post('/', async (req, res) => {
   try {
     const updates = req.body;
@@ -46,6 +48,7 @@ router.post('/', async (req, res) => {
     
     res.json(results);
   } catch (error) {
+    console.error('Error saving settings:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -85,8 +88,15 @@ router.post('/initialize', async (req, res) => {
       );
     }
     
-    res.json({ message: 'Default settings initialized', settings: defaultSettings });
+    const allSettings = await Setting.find({});
+    const settingsObj = {};
+    allSettings.forEach(setting => {
+      settingsObj[setting.key] = setting.value;
+    });
+    
+    res.json({ message: 'Default settings initialized', settings: settingsObj });
   } catch (error) {
+    console.error('Error initializing settings:', error);
     res.status(500).json({ error: error.message });
   }
 });
