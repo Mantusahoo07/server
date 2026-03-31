@@ -16,6 +16,8 @@ import { limiter } from './middleware/rateLimiter.js';
 import categoryRoutes from './routes/categories.js';
 import tableRoutes from './routes/tables.js';
 import settingRoutes from './routes/settings.js';
+import cartRoutes from './routes/cart.js';
+
 
 dotenv.config();
 
@@ -73,6 +75,7 @@ app.use('/api/reports', reportRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/tables', tableRoutes);
+app.use('/api/cart', cartRoutes);
 
 // Settings route with error handling
 app.use('/api/settings', (req, res, next) => {
