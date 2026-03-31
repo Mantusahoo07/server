@@ -13,6 +13,7 @@ const orderSchema = new mongoose.Schema({
   }],
   subtotal: Number,
   tax: Number,
+  serviceCharge: Number,
   total: Number,
   status: {
     type: String,
@@ -52,6 +53,7 @@ const orderSchema = new mongoose.Schema({
   },
   timerStart: { type: Date, default: Date.now },
   createdAt: { type: Date, default: Date.now },
+  completedAt: { type: Date, default: null },  // ← ADD THIS FIELD
   updatedAt: { type: Date, default: Date.now }
 });
 
