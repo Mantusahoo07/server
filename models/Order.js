@@ -30,12 +30,19 @@ const orderSchema = new mongoose.Schema({
     default: null
   },
   deliveryAddress: String,
-  tableNumber: String,
+  tableNumber: {
+    type: Number,
+    min: 1,
+    max: 20,
+    default: null
+  },
   customer: {
-    name: String,
+    name: { type: String, default: 'Walk-In' },
     phone: String,
     email: String
   },
+  isAdditionalOrder: { type: Boolean, default: false },
+  parentOrderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Order', default: null },
   payment: {
     method: String,
     status: String,
