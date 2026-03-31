@@ -27,7 +27,22 @@ router.get('/:id', async (req, res) => {
 // Create new order
 router.post('/', async (req, res) => {
   try {
-    const order = new Order(req.body);
+    const orderData = { ...req.body };
+    
+    // Clean up the data
+    if (orderData.orderType !== 'delivery') {
+      // Remove deliveryPlatform completely for non-delivery orders
+      delete orderData.deliveryPlatform;
+    }
+    
+    // Ensure deliveryPlatform is valid for delivery orders
+    if (orderData.orderType === 'delivery' && !orderData.deliveryPlatform) {
+      orderData.deliveryPlatform = 'home'; // Default to home delivery
+    }
+    
+    console.log('Creating order:', orderData);
+    
+    const order = new Order(orderData);
     await order.save();
     
     const io = req.app.get('io');
