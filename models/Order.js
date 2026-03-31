@@ -35,9 +35,14 @@ const orderSchema = new mongoose.Schema({
   deliveryPlatform: {
     type: String,
     enum: ['home', 'zomato', 'swiggy'],
+    default: null,
+    // Remove required validation
+    required: false
+  },
+  deliveryAddress: {
+    type: String,
     default: null
   },
-  deliveryAddress: String,
   tableNumber: { type: Number, min: 1, max: 20, default: null },
   customer: {
     name: { type: String, default: 'Walk-In' },
@@ -60,6 +65,15 @@ const orderSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now },
   completedAt: { type: Date, default: null },
   updatedAt: { type: Date, default: Date.now }
+});
+
+// Pre-save middleware to clean up deliveryPlatform
+orderSchema.pre('save', function(next) {
+  // If order is not delivery, remove deliveryPlatform
+  if (this.orderType !== 'delivery') {
+    this.deliveryPlatform = undefined;
+  }
+  next();
 });
 
 const Order = mongoose.models.Order || mongoose.model('Order', orderSchema);
