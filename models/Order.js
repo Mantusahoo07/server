@@ -13,7 +13,7 @@ const orderSchema = new mongoose.Schema({
   }],
   subtotal: Number,
   tax: Number,
-  serviceCharge: Number,
+  serviceCharge: { type: Number, default: 0 },
   total: Number,
   status: {
     type: String,
@@ -29,7 +29,8 @@ const orderSchema = new mongoose.Schema({
     type: String,
     enum: ['home', 'zomato', 'swiggy'],
     default: null,
-    required: false  // Make it optional
+    // Remove the required flag and allow null
+    sparse: true
   },
   deliveryAddress: {
     type: String,
@@ -55,10 +56,20 @@ const orderSchema = new mongoose.Schema({
     transactionId: String,
     timestamp: Date
   },
+  taxRate: { type: Number, default: 0 },
+  serviceChargeRate: { type: Number, default: 0 },
   timerStart: { type: Date, default: Date.now },
   createdAt: { type: Date, default: Date.now },
   completedAt: { type: Date, default: null },
   updatedAt: { type: Date, default: Date.now }
+});
+
+// Add a pre-save middleware to remove deliveryPlatform for non-delivery orders
+orderSchema.pre('save', function(next) {
+  if (this.orderType !== 'delivery') {
+    this.deliveryPlatform = undefined;
+  }
+  next();
 });
 
 const Order = mongoose.models.Order || mongoose.model('Order', orderSchema);
