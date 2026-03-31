@@ -22,15 +22,19 @@ const orderSchema = new mongoose.Schema({
   },
   orderType: {
     type: String,
-    enum: ['dine-in', 'pickup', 'delivery'],
+    enum: ['dine-in', 'pickup', 'takeaway', 'delivery'],  // Add 'takeaway' here
     default: 'dine-in'
   },
   deliveryPlatform: {
     type: String,
     enum: ['home', 'zomato', 'swiggy'],
+    default: null,
+    required: false  // Make it optional
+  },
+  deliveryAddress: {
+    type: String,
     default: null
   },
-  deliveryAddress: String,
   tableNumber: {
     type: Number,
     min: 1,
@@ -53,7 +57,7 @@ const orderSchema = new mongoose.Schema({
   },
   timerStart: { type: Date, default: Date.now },
   createdAt: { type: Date, default: Date.now },
-  completedAt: { type: Date, default: null },  // ← ADD THIS FIELD
+  completedAt: { type: Date, default: null },
   updatedAt: { type: Date, default: Date.now }
 });
 
