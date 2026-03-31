@@ -48,20 +48,29 @@ router.post('/', async (req, res) => {
 router.patch('/:id/status', async (req, res) => {
   try {
     const { status } = req.body;
+    console.log(`Updating order ${req.params.id} to status: ${status}`);
+    
     const order = await Order.findByIdAndUpdate(
       req.params.id,
       { status, updatedAt: new Date() },
       { new: true }
     );
-    if (!order) return res.status(404).json({ error: 'Order not found' });
     
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    
+    // Emit socket event
     const io = req.app.get('io');
     if (io) {
       io.emit('order-updated', order);
+      if (status === 'accepted') io.emit('order-accepted', order._id);
+      if (status === 'completed') io.emit('order-completed', order._id);
     }
     
     res.json(order);
   } catch (error) {
+    console.error('Error updating order status:', error);
     res.status(500).json({ error: error.message });
   }
 });
