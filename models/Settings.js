@@ -20,7 +20,7 @@ const settingSchema = new mongoose.Schema({
   }
 });
 
-// Check if model already exists before creating
+// Check if model already exists before creating to prevent overwrite errors
 const Setting = mongoose.models.Setting || mongoose.model('Setting', settingSchema);
 
 export default Setting;
