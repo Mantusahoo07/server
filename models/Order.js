@@ -3,12 +3,12 @@ import mongoose from 'mongoose';
 const orderSchema = new mongoose.Schema({
   orderNumber: Number,
   items: [{
-    id: String,
+    id: { type: String, required: true },
     name: String,
     quantity: Number,
     price: Number,
     specialInstructions: String,
-    status: { type: String, default: 'pending' },
+    status: { type: String, default: 'pending', enum: ['pending', 'preparing', 'completed'] },
     completedAt: Date
   }],
   subtotal: Number,
@@ -16,10 +16,20 @@ const orderSchema = new mongoose.Schema({
   total: Number,
   status: {
     type: String,
-    enum: ['pending', 'accepted', 'preparing', 'completed', 'cancelled'],
+    enum: ['pending', 'accepted', 'preparing', 'completed', 'cancelled', 'hold'],
     default: 'pending'
   },
-  orderType: { type: String, default: 'dine-in' },
+  orderType: {
+    type: String,
+    enum: ['dine-in', 'pickup', 'delivery'],
+    default: 'dine-in'
+  },
+  deliveryPlatform: {
+    type: String,
+    enum: ['home', 'zomato', 'swiggy'],
+    default: null
+  },
+  deliveryAddress: String,
   tableNumber: String,
   customer: {
     name: String,
@@ -38,7 +48,6 @@ const orderSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now }
 });
 
-// Check if model already exists before creating
 const Order = mongoose.models.Order || mongoose.model('Order', orderSchema);
 
 export default Order;
