@@ -67,30 +67,28 @@ router.patch('/:id/status', async (req, res) => {
   }
 });
 
-// Update item status - FIXED VERSION
+// Update item status - FIXED VERSION// Update item status - Using menu item ID instead of MongoDB _id
 router.patch('/:id/items/:itemId', async (req, res) => {
   try {
     const { status } = req.body;
-    console.log(`🔄 Updating item ${req.params.itemId} to status: ${status}`);
+    console.log(`🔄 Updating item with menu ID: ${req.params.itemId} to status: ${status}`);
     
     // Find the order
     const order = await Order.findById(req.params.id);
     if (!order) {
-      console.log('❌ Order not found:', req.params.id);
       return res.status(404).json({ error: 'Order not found' });
     }
     
-    // Find the item
-    const item = order.items.id(req.params.itemId);
-    if (!item) {
-      console.log('❌ Item not found:', req.params.itemId);
+    // Find the item by its 'id' field (menu item ID), not MongoDB _id
+    const itemIndex = order.items.findIndex(item => item.id === req.params.itemId);
+    if (itemIndex === -1) {
       return res.status(404).json({ error: 'Item not found' });
     }
     
     // Update item status
-    item.status = status;
+    order.items[itemIndex].status = status;
     if (status === 'completed') {
-      item.completedAt = new Date();
+      order.items[itemIndex].completedAt = new Date();
     }
     
     // Save the order
@@ -103,7 +101,6 @@ router.patch('/:id/items/:itemId', async (req, res) => {
       io.emit('order-updated', order);
     }
     
-    // Return the updated order
     res.json(order);
   } catch (error) {
     console.error('❌ Error updating item status:', error);
