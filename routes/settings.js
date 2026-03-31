@@ -1,24 +1,42 @@
 import express from 'express';
+import Setting from '../models/Setting.js';
 
 const router = express.Router();
 
-// In-memory storage for settings
-let settings = {
-  taxRate: 10,
-  serviceCharge: 0,
-  kitchenPrint: true,
-  autoAcceptOrders: false,
-  soundEnabled: true,
-  theme: 'light'
-};
-
-// Get all settings
+// Get all settings (from database)
 router.get('/', async (req, res) => {
   try {
-    res.json(settings);
+    // Check if settings exist in database
+    let settings = await Setting.findOne({ key: 'general' });
+    
+    if (!settings) {
+      // Create default settings if not exists
+      settings = new Setting({
+        key: 'general',
+        value: {
+          taxRate: 10,
+          serviceCharge: 0,
+          kitchenPrint: true,
+          autoAcceptOrders: false,
+          soundEnabled: true,
+          theme: 'light'
+        }
+      });
+      await settings.save();
+    }
+    
+    res.json(settings.value);
   } catch (error) {
     console.error('Error fetching settings:', error);
-    res.status(500).json({ error: 'Failed to fetch settings' });
+    // Return default settings on error
+    res.json({
+      taxRate: 10,
+      serviceCharge: 0,
+      kitchenPrint: true,
+      autoAcceptOrders: false,
+      soundEnabled: true,
+      theme: 'light'
+    });
   }
 });
 
@@ -26,19 +44,34 @@ router.get('/', async (req, res) => {
 router.post('/', async (req, res) => {
   try {
     const updates = req.body;
-    settings = { ...settings, ...updates };
-    console.log('Settings updated:', settings);
-    res.json(settings);
+    
+    // Find and update or create
+    let settings = await Setting.findOne({ key: 'general' });
+    
+    if (settings) {
+      settings.value = { ...settings.value, ...updates };
+      settings.updatedAt = new Date();
+      await settings.save();
+    } else {
+      settings = new Setting({
+        key: 'general',
+        value: updates
+      });
+      await settings.save();
+    }
+    
+    console.log('Settings saved to database:', settings.value);
+    res.json(settings.value);
   } catch (error) {
     console.error('Error saving settings:', error);
-    res.status(500).json({ error: 'Failed to save settings' });
+    res.status(500).json({ error: error.message });
   }
 });
 
-// Initialize default settings
+// Initialize or reset settings
 router.post('/initialize', async (req, res) => {
   try {
-    settings = {
+    const defaultSettings = {
       taxRate: 10,
       serviceCharge: 0,
       kitchenPrint: true,
@@ -46,28 +79,41 @@ router.post('/initialize', async (req, res) => {
       soundEnabled: true,
       theme: 'light'
     };
-    res.json({ 
-      message: 'Settings initialized', 
-      settings,
-      timestamp: new Date()
-    });
+    
+    // Find and update or create
+    let settings = await Setting.findOne({ key: 'general' });
+    
+    if (settings) {
+      settings.value = defaultSettings;
+      settings.updatedAt = new Date();
+      await settings.save();
+    } else {
+      settings = new Setting({
+        key: 'general',
+        value: defaultSettings
+      });
+      await settings.save();
+    }
+    
+    console.log('Settings initialized:', defaultSettings);
+    res.json({ message: 'Settings initialized', settings: defaultSettings });
   } catch (error) {
     console.error('Error initializing settings:', error);
-    res.status(500).json({ error: 'Failed to initialize settings' });
+    res.status(500).json({ error: error.message });
   }
 });
 
-// Get specific setting
+// Get single setting
 router.get('/:key', async (req, res) => {
   try {
-    const { key } = req.params;
-    if (settings.hasOwnProperty(key)) {
-      res.json({ [key]: settings[key] });
+    const settings = await Setting.findOne({ key: 'general' });
+    if (settings && settings.value[req.params.key] !== undefined) {
+      res.json({ [req.params.key]: settings.value[req.params.key] });
     } else {
       res.status(404).json({ error: 'Setting not found' });
     }
   } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch setting' });
+    res.status(500).json({ error: error.message });
   }
 });
 
