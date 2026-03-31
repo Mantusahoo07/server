@@ -30,7 +30,6 @@ router.post('/', async (req, res) => {
     const order = new Order(req.body);
     await order.save();
     
-    // Emit socket event
     const io = req.app.get('io');
     if (io) {
       console.log('📡 New order:', order.orderNumber);
@@ -56,13 +55,10 @@ router.patch('/:id/status', async (req, res) => {
     );
     if (!order) return res.status(404).json({ error: 'Order not found' });
     
-    // Emit socket event
     const io = req.app.get('io');
     if (io) {
       console.log('📡 Order status updated:', order.orderNumber, status);
       io.emit('order-updated', order);
-      if (status === 'accepted') io.emit('order-accepted', order._id);
-      if (status === 'completed') io.emit('order-completed', order._id);
     }
     
     res.json(order);
@@ -71,44 +67,46 @@ router.patch('/:id/status', async (req, res) => {
   }
 });
 
-// Update item status (SINGLE VERSION - REMOVED DUPLICATE)
+// Update item status - FIXED VERSION
 router.patch('/:id/items/:itemId', async (req, res) => {
   try {
     const { status } = req.body;
-    console.log(`Updating item ${req.params.itemId} to status: ${status}`);
+    console.log(`🔄 Updating item ${req.params.itemId} to status: ${status}`);
     
+    // Find the order
     const order = await Order.findById(req.params.id);
     if (!order) {
+      console.log('❌ Order not found:', req.params.id);
       return res.status(404).json({ error: 'Order not found' });
     }
     
+    // Find the item
     const item = order.items.id(req.params.itemId);
     if (!item) {
+      console.log('❌ Item not found:', req.params.itemId);
       return res.status(404).json({ error: 'Item not found' });
     }
     
+    // Update item status
     item.status = status;
     if (status === 'completed') {
       item.completedAt = new Date();
     }
     
+    // Save the order
     await order.save();
+    console.log('✅ Item status updated successfully');
     
-    // Emit socket event for real-time sync
+    // Emit socket event
     const io = req.app.get('io');
     if (io) {
-      console.log('📡 Item status updated:', item.name, status);
       io.emit('order-updated', order);
-      io.emit('item-status-updated', { 
-        orderId: req.params.id, 
-        itemId: req.params.itemId, 
-        status 
-      });
     }
     
+    // Return the updated order
     res.json(order);
   } catch (error) {
-    console.error('Error updating item status:', error);
+    console.error('❌ Error updating item status:', error);
     res.status(500).json({ error: error.message });
   }
 });
