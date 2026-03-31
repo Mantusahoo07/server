@@ -17,14 +17,14 @@ const tableSchema = new mongoose.Schema({
     type: Number,
     default: 4
   },
+  section: {
+    type: String,
+    default: 'Main Hall'
+  },
   currentOrderId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Order',
     default: null
-  },
-  section: {
-    type: String,
-    default: 'Main Hall'
   },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
