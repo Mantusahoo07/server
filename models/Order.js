@@ -22,14 +22,14 @@ const orderSchema = new mongoose.Schema({
   },
   orderType: {
     type: String,
-    enum: ['dine-in', 'pickup', 'takeaway', 'delivery'],  // 'takeaway' is now a valid option
+    enum: ['dine-in', 'pickup', 'takeaway', 'delivery'],
     default: 'dine-in'
   },
   deliveryPlatform: {
     type: String,
     enum: ['home', 'zomato', 'swiggy'],
     default: null,
-    required: false
+    required: false  // Make it optional
   },
   deliveryAddress: {
     type: String,
