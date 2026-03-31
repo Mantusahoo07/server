@@ -26,6 +26,8 @@ const io = new Server(httpServer, {
   }
 });
 
+app.set('io', io); // ← ADD THIS LINE
+
 // Connect to MongoDB
 connectDB();
 
