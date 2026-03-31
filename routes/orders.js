@@ -29,6 +29,7 @@ router.post('/', async (req, res) => {
   try {
     const orderData = { ...req.body };
     
+    // Clean up data for non-delivery orders
     if (orderData.orderType !== 'delivery') {
       delete orderData.deliveryPlatform;
     }
@@ -141,12 +142,13 @@ router.delete('/:id/items/:itemId', async (req, res) => {
   }
 });
 
-// Update item quantity
+// Update item quantity - FIXED
 router.patch('/:id/items/:itemId', async (req, res) => {
   try {
     const { quantity } = req.body;
-    const order = await Order.findById(req.params.id);
+    console.log(`Updating quantity for item ${req.params.itemId} to ${quantity}`);
     
+    const order = await Order.findById(req.params.id);
     if (!order) {
       return res.status(404).json({ error: 'Order not found' });
     }
@@ -221,7 +223,7 @@ router.patch('/:id/status', async (req, res) => {
   }
 });
 
-// Update item status
+// Update item status (for kitchen display)
 router.patch('/:id/items/:itemId/status', async (req, res) => {
   try {
     const { status } = req.body;
