@@ -70,8 +70,18 @@ router.post('/', async (req, res) => {
   try {
     const order = new Order(req.body);
     await order.save();
+    
+    // Emit socket event for real-time update
+    const io = req.app.get('io');
+    if (io) {
+      console.log('📡 Emitting new order via socket:', order.orderNumber);
+      io.emit('new-order-received', order);
+      io.emit('order-updated', order);
+    }
+    
     res.status(201).json(order);
   } catch (error) {
+    console.error('Error creating order:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -86,8 +96,19 @@ router.patch('/:id/status', async (req, res) => {
       { new: true }
     );
     if (!order) return res.status(404).json({ error: 'Order not found' });
+    
+    // Emit socket event
+    const io = req.app.get('io');
+    if (io) {
+      console.log('📡 Emitting order status update:', order.orderNumber, status);
+      io.emit('order-updated', order);
+      if (status === 'accepted') io.emit('order-accepted', order._id);
+      if (status === 'completed') io.emit('order-completed', order._id);
+    }
+    
     res.json(order);
   } catch (error) {
+    console.error('Error updating order status:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -108,8 +129,22 @@ router.patch('/:id/items/:itemId', async (req, res) => {
     }
     
     await order.save();
+    
+    // Emit socket event
+    const io = req.app.get('io');
+    if (io) {
+      console.log('📡 Emitting item status update:', item.name, status);
+      io.emit('order-updated', order);
+      io.emit('item-status-updated', { 
+        orderId: req.params.id, 
+        itemId: req.params.itemId, 
+        status 
+      });
+    }
+    
     res.json(order);
   } catch (error) {
+    console.error('Error updating item status:', error);
     res.status(500).json({ error: error.message });
   }
 });
