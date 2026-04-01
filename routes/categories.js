@@ -5,12 +5,18 @@ import { authenticate, authorize } from '../middleware/auth.js';
 
 const router = express.Router();
 
-// Get all categories sorted by sortOrder
+// Get all categories (public) - sorted by sortOrder
 router.get('/', async (req, res) => {
   try {
-    console.log('Fetching all categories sorted by sortOrder...');
-    const categories = await Category.find({ isActive: true })
-      .sort({ sortOrder: 1, name: 1 });  // Sort by sortOrder first, then by name
+    const { showInMenu, showInKitchen } = req.query;
+    const query = { isActive: true };
+    
+    if (showInMenu === 'true') query.showInMenu = true;
+    if (showInKitchen === 'true') query.showInKitchen = true;
+    
+    const categories = await Category.find(query)
+      .sort({ sortOrder: 1, name: 1 });
+    
     console.log(`Found ${categories.length} categories`);
     res.json(categories);
   } catch (error) {
@@ -36,21 +42,24 @@ router.get('/:id', async (req, res) => {
 // Create new category (admin/manager only)
 router.post('/', authenticate, authorize('admin', 'manager'), async (req, res) => {
   try {
-    const { name, description, icon, bgColor, sortOrder } = req.body;
+    const { 
+      name, 
+      description, 
+      icon, 
+      bgColor, 
+      sortOrder, 
+      showInKitchen, 
+      showInMenu 
+    } = req.body;
     
-    console.log('Creating category:', { name, icon, bgColor, sortOrder });
+    console.log('Creating category:', { name, icon, sortOrder, showInKitchen });
     
     // Check if category already exists
-    const existingCategory = await Category.findOne({ name: { $regex: new RegExp(`^${name}$`, 'i') } });
+    const existingCategory = await Category.findOne({ 
+      name: { $regex: new RegExp(`^${name}$`, 'i') } 
+    });
     if (existingCategory) {
       return res.status(400).json({ error: 'Category already exists' });
-    }
-    
-    // If no sortOrder provided, get the max sortOrder and add 1
-    let finalSortOrder = sortOrder;
-    if (finalSortOrder === undefined || finalSortOrder === null) {
-      const maxSortOrder = await Category.findOne().sort({ sortOrder: -1 }).select('sortOrder');
-      finalSortOrder = maxSortOrder ? maxSortOrder.sortOrder + 1 : 0;
     }
     
     const category = new Category({
@@ -58,7 +67,9 @@ router.post('/', authenticate, authorize('admin', 'manager'), async (req, res) =
       description,
       icon: icon || '📦',
       bgColor: bgColor || '#95a5a6',
-      sortOrder: finalSortOrder
+      sortOrder: sortOrder !== undefined ? sortOrder : 0,
+      showInKitchen: showInKitchen !== undefined ? showInKitchen : true,
+      showInMenu: showInMenu !== undefined ? showInMenu : true
     });
     
     await category.save();
@@ -73,7 +84,16 @@ router.post('/', authenticate, authorize('admin', 'manager'), async (req, res) =
 // Update category
 router.put('/:id', authenticate, authorize('admin', 'manager'), async (req, res) => {
   try {
-    const { name, description, icon, bgColor, sortOrder, isActive } = req.body;
+    const { 
+      name, 
+      description, 
+      icon, 
+      bgColor, 
+      sortOrder, 
+      isActive,
+      showInKitchen,
+      showInMenu
+    } = req.body;
     
     const category = await Category.findById(req.params.id);
     if (!category) {
@@ -97,6 +117,8 @@ router.put('/:id', authenticate, authorize('admin', 'manager'), async (req, res)
     category.bgColor = bgColor || category.bgColor;
     category.sortOrder = sortOrder !== undefined ? sortOrder : category.sortOrder;
     category.isActive = isActive !== undefined ? isActive : category.isActive;
+    category.showInKitchen = showInKitchen !== undefined ? showInKitchen : category.showInKitchen;
+    category.showInMenu = showInMenu !== undefined ? showInMenu : category.showInMenu;
     category.updatedAt = new Date();
     
     await category.save();
@@ -134,39 +156,74 @@ router.delete('/:id', authenticate, authorize('admin'), async (req, res) => {
   }
 });
 
-// Reorder categories - Bulk update sort orders
+// Reorder categories (bulk update sortOrder)
 router.post('/reorder', authenticate, authorize('admin', 'manager'), async (req, res) => {
   try {
     const { categories } = req.body; // Array of { id, sortOrder }
     
-    if (!categories || !Array.isArray(categories)) {
-      return res.status(400).json({ error: 'Invalid categories data' });
-    }
+    const updates = categories.map(async (cat) => {
+      return Category.findByIdAndUpdate(
+        cat.id,
+        { sortOrder: cat.sortOrder, updatedAt: new Date() },
+        { new: true }
+      );
+    });
     
-    const updatePromises = categories.map(cat => 
-      Category.findByIdAndUpdate(cat.id, { sortOrder: cat.sortOrder, updatedAt: new Date() })
-    );
-    
-    await Promise.all(updatePromises);
-    
-    const updatedCategories = await Category.find({ isActive: true }).sort({ sortOrder: 1, name: 1 });
-    console.log('Categories reordered successfully');
-    res.json({ message: 'Categories reordered successfully', categories: updatedCategories });
+    const updatedCategories = await Promise.all(updates);
+    res.json({ 
+      message: 'Categories reordered successfully',
+      categories: updatedCategories 
+    });
   } catch (error) {
     console.error('Error reordering categories:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// Get category order for display
-router.get('/order/list', async (req, res) => {
+// Toggle kitchen visibility
+router.patch('/:id/toggle-kitchen', authenticate, authorize('admin', 'manager'), async (req, res) => {
   try {
-    const categories = await Category.find({ isActive: true })
-      .select('_id name icon sortOrder')
-      .sort({ sortOrder: 1, name: 1 });
-    res.json(categories);
+    const { showInKitchen } = req.body;
+    const category = await Category.findById(req.params.id);
+    
+    if (!category) {
+      return res.status(404).json({ error: 'Category not found' });
+    }
+    
+    category.showInKitchen = showInKitchen !== undefined ? showInKitchen : !category.showInKitchen;
+    category.updatedAt = new Date();
+    await category.save();
+    
+    res.json({ 
+      message: `Kitchen visibility ${category.showInKitchen ? 'enabled' : 'disabled'}`,
+      category 
+    });
   } catch (error) {
-    console.error('Error fetching category order:', error);
+    console.error('Error toggling kitchen visibility:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Toggle menu visibility
+router.patch('/:id/toggle-menu', authenticate, authorize('admin', 'manager'), async (req, res) => {
+  try {
+    const { showInMenu } = req.body;
+    const category = await Category.findById(req.params.id);
+    
+    if (!category) {
+      return res.status(404).json({ error: 'Category not found' });
+    }
+    
+    category.showInMenu = showInMenu !== undefined ? showInMenu : !category.showInMenu;
+    category.updatedAt = new Date();
+    await category.save();
+    
+    res.json({ 
+      message: `Menu visibility ${category.showInMenu ? 'enabled' : 'disabled'}`,
+      category 
+    });
+  } catch (error) {
+    console.error('Error toggling menu visibility:', error);
     res.status(500).json({ error: error.message });
   }
 });
