@@ -18,6 +18,16 @@ const categorySchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  showInKitchen: {
+    type: Boolean,
+    default: true,
+    description: 'Whether items in this category should appear in kitchen display'
+  },
+  showInMenu: {
+    type: Boolean,
+    default: true,
+    description: 'Whether this category should appear in POS menu'
+  },
   isActive: {
     type: Boolean,
     default: true
