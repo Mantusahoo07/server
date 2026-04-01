@@ -5,11 +5,12 @@ import { authenticate, authorize } from '../middleware/auth.js';
 
 const router = express.Router();
 
-// Get all categories (public)
+// Get all categories sorted by sortOrder
 router.get('/', async (req, res) => {
   try {
-    console.log('Fetching all categories...');
-    const categories = await Category.find({ isActive: true }).sort({ sortOrder: 1, name: 1 });
+    console.log('Fetching all categories sorted by sortOrder...');
+    const categories = await Category.find({ isActive: true })
+      .sort({ sortOrder: 1, name: 1 });  // Sort by sortOrder first, then by name
     console.log(`Found ${categories.length} categories`);
     res.json(categories);
   } catch (error) {
@@ -37,7 +38,7 @@ router.post('/', authenticate, authorize('admin', 'manager'), async (req, res) =
   try {
     const { name, description, icon, bgColor, sortOrder } = req.body;
     
-    console.log('Creating category:', { name, icon, bgColor });
+    console.log('Creating category:', { name, icon, bgColor, sortOrder });
     
     // Check if category already exists
     const existingCategory = await Category.findOne({ name: { $regex: new RegExp(`^${name}$`, 'i') } });
@@ -45,12 +46,19 @@ router.post('/', authenticate, authorize('admin', 'manager'), async (req, res) =
       return res.status(400).json({ error: 'Category already exists' });
     }
     
+    // If no sortOrder provided, get the max sortOrder and add 1
+    let finalSortOrder = sortOrder;
+    if (finalSortOrder === undefined || finalSortOrder === null) {
+      const maxSortOrder = await Category.findOne().sort({ sortOrder: -1 }).select('sortOrder');
+      finalSortOrder = maxSortOrder ? maxSortOrder.sortOrder + 1 : 0;
+    }
+    
     const category = new Category({
       name,
       description,
       icon: icon || '📦',
       bgColor: bgColor || '#95a5a6',
-      sortOrder: sortOrder || 0
+      sortOrder: finalSortOrder
     });
     
     await category.save();
@@ -122,6 +130,43 @@ router.delete('/:id', authenticate, authorize('admin'), async (req, res) => {
     res.json({ message: 'Category deleted successfully' });
   } catch (error) {
     console.error('Error deleting category:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Reorder categories - Bulk update sort orders
+router.post('/reorder', authenticate, authorize('admin', 'manager'), async (req, res) => {
+  try {
+    const { categories } = req.body; // Array of { id, sortOrder }
+    
+    if (!categories || !Array.isArray(categories)) {
+      return res.status(400).json({ error: 'Invalid categories data' });
+    }
+    
+    const updatePromises = categories.map(cat => 
+      Category.findByIdAndUpdate(cat.id, { sortOrder: cat.sortOrder, updatedAt: new Date() })
+    );
+    
+    await Promise.all(updatePromises);
+    
+    const updatedCategories = await Category.find({ isActive: true }).sort({ sortOrder: 1, name: 1 });
+    console.log('Categories reordered successfully');
+    res.json({ message: 'Categories reordered successfully', categories: updatedCategories });
+  } catch (error) {
+    console.error('Error reordering categories:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get category order for display
+router.get('/order/list', async (req, res) => {
+  try {
+    const categories = await Category.find({ isActive: true })
+      .select('_id name icon sortOrder')
+      .sort({ sortOrder: 1, name: 1 });
+    res.json(categories);
+  } catch (error) {
+    console.error('Error fetching category order:', error);
     res.status(500).json({ error: error.message });
   }
 });
