@@ -19,7 +19,6 @@ import settingRoutes from './routes/settings.js';
 import cartRoutes from './routes/cart.js';
 import businessRoutes from './routes/business.js';
 
-
 dotenv.config();
 
 const app = express();
@@ -27,7 +26,7 @@ const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: {
     origin: process.env.CLIENT_URL || '*',
-    methods: ['GET', 'POST'],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
     credentials: true
   }
 });
@@ -77,20 +76,8 @@ app.use('/api/payments', paymentRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/tables', tableRoutes);
 app.use('/api/cart', cartRoutes);
+app.use('/api/settings', settingRoutes);  // Fixed: Direct use without try-catch wrapper
 app.use('/api/business', businessRoutes);
-
-// Settings route with error handling
-app.use('/api/settings', (req, res, next) => {
-  try {
-    settingRoutes(req, res, next);
-  } catch (error) {
-    console.error('Settings route error:', error);
-    res.status(500).json({ 
-      error: 'Settings service temporarily unavailable',
-      message: error.message 
-    });
-  }
-});
 
 // Root endpoint
 app.get('/', (req, res) => {
@@ -105,9 +92,11 @@ app.get('/', (req, res) => {
       categories: '/api/categories',
       tables: '/api/tables',
       settings: '/api/settings',
+      business: '/api/business',
       auth: '/api/auth',
       payments: '/api/payments',
-      reports: '/api/reports'
+      reports: '/api/reports',
+      cart: '/api/cart'
     },
     timestamp: new Date()
   });
@@ -118,7 +107,8 @@ app.get('/health', (req, res) => {
   res.status(200).json({ 
     status: 'healthy', 
     timestamp: new Date(),
-    uptime: process.uptime()
+    uptime: process.uptime(),
+    mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
   });
 });
 
@@ -149,6 +139,19 @@ httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`🔌 Socket.io ready for connections`);
   console.log(`📡 API URL: http://localhost:${PORT}/api`);
+  console.log(`📋 Available endpoints:`);
+  console.log(`   - GET  /api/business      - Business details`);
+  console.log(`   - POST /api/business      - Save business details`);
+  console.log(`   - GET  /api/settings      - System settings`);
+  console.log(`   - POST /api/settings      - Update settings`);
+  console.log(`   - GET  /api/categories    - Categories list`);
+  console.log(`   - POST /api/categories    - Create category`);
+  console.log(`   - GET  /api/tables        - Tables list`);
+  console.log(`   - POST /api/tables        - Create table`);
+  console.log(`   - GET  /api/menu          - Menu items`);
+  console.log(`   - POST /api/menu          - Create menu item`);
+  console.log(`   - GET  /api/orders        - Orders list`);
+  console.log(`   - POST /api/orders        - Create order`);
 });
 
 // Graceful shutdown
