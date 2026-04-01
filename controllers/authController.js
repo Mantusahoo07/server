@@ -11,17 +11,38 @@ export const register = async (req, res) => {
   try {
     const { username, email, password, role } = req.body;
     
-    // Only admin can create users
-    if (req.userRole !== 'admin') {
-      return res.status(403).json({ error: 'Only admin can create users' });
+    // Check if this is the first user
+    const userCount = await User.countDocuments();
+    const isFirstUser = userCount === 0;
+    
+    // For first user, no authentication needed
+    // For subsequent users, require admin authentication
+    if (!isFirstUser) {
+      // Check if user is authenticated
+      if (!req.userId) {
+        return res.status(401).json({ error: 'Authentication required' });
+      }
+      
+      const currentUser = await User.findById(req.userId);
+      if (!currentUser || currentUser.role !== 'admin') {
+        return res.status(403).json({ error: 'Only admin can create users' });
+      }
     }
+    
+    // For first user, force role to admin
+    const userRole = isFirstUser ? 'admin' : (role || 'pos');
     
     const existingUser = await User.findOne({ $or: [{ email }, { username }] });
     if (existingUser) {
       return res.status(400).json({ error: 'User already exists' });
     }
     
-    const user = new User({ username, email, password, role });
+    const user = new User({ 
+      username, 
+      email, 
+      password, 
+      role: userRole 
+    });
     await user.save();
     
     res.status(201).json({
@@ -34,6 +55,7 @@ export const register = async (req, res) => {
       }
     });
   } catch (error) {
+    console.error('Registration error:', error);
     res.status(500).json({ error: error.message });
   }
 };
@@ -71,6 +93,7 @@ export const login = async (req, res) => {
       }
     });
   } catch (error) {
+    console.error('Login error:', error);
     res.status(500).json({ error: error.message });
   }
 };
@@ -90,6 +113,7 @@ export const changePassword = async (req, res) => {
     
     res.json({ message: 'Password changed successfully' });
   } catch (error) {
+    console.error('Change password error:', error);
     res.status(500).json({ error: error.message });
   }
 };
@@ -99,6 +123,7 @@ export const getCurrentUser = async (req, res) => {
     const user = await User.findById(req.userId).select('-password');
     res.json(user);
   } catch (error) {
+    console.error('Get current user error:', error);
     res.status(500).json({ error: error.message });
   }
 };
@@ -111,6 +136,7 @@ export const getAllUsers = async (req, res) => {
     const users = await User.find().select('-password');
     res.json(users);
   } catch (error) {
+    console.error('Get all users error:', error);
     res.status(500).json({ error: error.message });
   }
 };
@@ -135,6 +161,17 @@ export const updateUser = async (req, res) => {
     await user.save();
     res.json(user);
   } catch (error) {
+    console.error('Update user error:', error);
     res.status(500).json({ error: error.message });
+  }
+};
+
+export const checkUsers = async (req, res) => {
+  try {
+    const userCount = await User.countDocuments();
+    res.json({ isFirstUser: userCount === 0 });
+  } catch (error) {
+    console.error('Check users error:', error);
+    res.json({ isFirstUser: true });
   }
 };
