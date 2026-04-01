@@ -11,6 +11,11 @@ export const register = async (req, res) => {
   try {
     const { username, email, password, role } = req.body;
     
+    // Only admin can create users
+    if (req.userRole !== 'admin') {
+      return res.status(403).json({ error: 'Only admin can create users' });
+    }
+    
     const existingUser = await User.findOne({ $or: [{ email }, { username }] });
     if (existingUser) {
       return res.status(400).json({ error: 'User already exists' });
@@ -19,14 +24,13 @@ export const register = async (req, res) => {
     const user = new User({ username, email, password, role });
     await user.save();
     
-    const token = generateToken(user._id);
     res.status(201).json({
-      token,
       user: {
         id: user._id,
         username: user.username,
         email: user.email,
-        role: user.role
+        role: user.role,
+        permissions: user.permissions
       }
     });
   } catch (error) {
@@ -85,6 +89,51 @@ export const changePassword = async (req, res) => {
     await user.save();
     
     res.json({ message: 'Password changed successfully' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+export const getCurrentUser = async (req, res) => {
+  try {
+    const user = await User.findById(req.userId).select('-password');
+    res.json(user);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+export const getAllUsers = async (req, res) => {
+  try {
+    if (req.userRole !== 'admin') {
+      return res.status(403).json({ error: 'Only admin can view users' });
+    }
+    const users = await User.find().select('-password');
+    res.json(users);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+export const updateUser = async (req, res) => {
+  try {
+    if (req.userRole !== 'admin') {
+      return res.status(403).json({ error: 'Only admin can update users' });
+    }
+    
+    const { role, active, permissions } = req.body;
+    const user = await User.findById(req.params.id);
+    
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    if (role) user.role = role;
+    if (active !== undefined) user.active = active;
+    if (permissions) user.permissions = { ...user.permissions, ...permissions };
+    
+    await user.save();
+    res.json(user);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
