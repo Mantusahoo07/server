@@ -36,9 +36,29 @@ export const authorize = (...roles) => {
 
 export const checkPermission = (permission) => {
   return (req, res, next) => {
-    if (!req.userPermissions[permission]) {
+    if (!req.userPermissions || !req.userPermissions[permission]) {
       return res.status(403).json({ error: 'Insufficient permissions' });
     }
     next();
+  };
+};
+
+// Role-based access helpers
+export const canAccessTab = (tab) => {
+  return (req, res, next) => {
+    const tabPermissions = {
+      'pos': 'canAccessPOS',
+      'kitchen': 'canAccessKitchen',
+      'orders': 'canAccessOrders',
+      'reports': 'canAccessReports',
+      'settings': 'canAccessSettings'
+    };
+    
+    const permission = tabPermissions[tab];
+    if (!permission || req.userPermissions[permission]) {
+      next();
+    } else {
+      res.status(403).json({ error: `Access denied for ${tab} tab` });
+    }
   };
 };
