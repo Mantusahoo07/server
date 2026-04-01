@@ -5,6 +5,7 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js"
+    "create-users": "node scripts/create-users.js"
   },
   "dependencies": {
     "express": "^4.18.2",
