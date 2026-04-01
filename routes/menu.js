@@ -7,17 +7,17 @@ import {
   bulkUpdateAvailability,
   getCategories
 } from '../controllers/menuController.js';
-import { authenticate, authorize, checkPermission } from '../middleware/auth.js';
+import { authenticate, authorize } from '../middleware/auth.js';
 
 const router = express.Router();
 
-// Make GET endpoints public (no authentication required)
+// Public routes
 router.get('/', getMenuItems);
 router.get('/categories', getCategories);
 
-// All other endpoints require authentication
-router.post('/', authenticate, authorize('admin', 'manager'), checkPermission('canEditMenu'), createMenuItem);
-router.put('/:id', authenticate, authorize('admin', 'manager'), checkPermission('canEditMenu'), updateMenuItem);
+// Protected routes
+router.post('/', authenticate, authorize('admin', 'manager'), createMenuItem);
+router.put('/:id', authenticate, authorize('admin', 'manager'), updateMenuItem);
 router.delete('/:id', authenticate, authorize('admin'), deleteMenuItem);
 router.post('/bulk-update', authenticate, authorize('admin', 'manager'), bulkUpdateAvailability);
 
