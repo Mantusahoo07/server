@@ -1,38 +1,55 @@
 import express from 'express';
 import Order from '../models/Order.js';
+import { authenticate } from '../middleware/auth.js';
 
 const router = express.Router();
 
 // Get all orders
-router.get('/', async (req, res) => {
+router.get('/', authenticate, async (req, res) => {
   try {
     const orders = await Order.find({}).sort({ createdAt: -1 });
     res.json(orders);
   } catch (error) {
+    console.error('Error fetching orders:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
 // Get order by ID
-router.get('/:id', async (req, res) => {
+router.get('/:id', authenticate, async (req, res) => {
   try {
     const order = await Order.findById(req.params.id);
     if (!order) return res.status(404).json({ error: 'Order not found' });
     res.json(order);
   } catch (error) {
+    console.error('Error fetching order:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
 // Create new order
-router.post('/', async (req, res) => {
+router.post('/', authenticate, async (req, res) => {
   try {
     const orderData = { ...req.body };
     
     // Clean up data for non-delivery orders
     if (orderData.orderType !== 'delivery') {
       delete orderData.deliveryPlatform;
+      delete orderData.deliveryAddress;
     }
+    
+    // Ensure payment method is null for new orders
+    orderData.payment = {
+      method: null,
+      status: 'pending',
+      amount: orderData.total,
+      timestamp: new Date()
+    };
+    
+    // Add created by user
+    orderData.createdBy = req.userId;
+    
+    console.log('Creating order:', JSON.stringify(orderData, null, 2));
     
     const order = new Order(orderData);
     await order.save();
@@ -40,7 +57,7 @@ router.post('/', async (req, res) => {
     const io = req.app.get('io');
     if (io) {
       console.log('📡 New order:', order.orderNumber);
-      io.emit('new-order', order);
+      io.emit('new-order-received', order);
       io.emit('order-updated', order);
     }
     
@@ -51,24 +68,101 @@ router.post('/', async (req, res) => {
   }
 });
 
-// Add item to order
-router.post('/:id/items', async (req, res) => {
+// Update order status
+router.patch('/:id/status', authenticate, async (req, res) => {
   try {
-    const { item } = req.body;
+    const { status } = req.body;
+    const updateData = { 
+      status, 
+      updatedAt: new Date() 
+    };
     
-    // Validate required fields
-    if (!item || !item.id) {
-      console.error('Invalid item data:', item);
-      return res.status(400).json({ error: 'Item ID is required' });
+    if (status === 'completed') {
+      updateData.completedAt = new Date();
+      updateData.completedBy = req.userId;
     }
     
-    const order = await Order.findById(req.params.id);
+    if (status === 'accepted') {
+      updateData.acceptedBy = req.userId;
+    }
+    
+    const order = await Order.findByIdAndUpdate(
+      req.params.id,
+      updateData,
+      { new: true }
+    );
     
     if (!order) {
       return res.status(404).json({ error: 'Order not found' });
     }
     
-    // Create item with default values if missing
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('order-updated', order);
+      if (status === 'accepted') io.emit('order-accepted', order._id);
+      if (status === 'ready_for_billing') io.emit('order-ready-for-billing', order._id);
+      if (status === 'completed') io.emit('order-completed', order._id);
+    }
+    
+    res.json(order);
+  } catch (error) {
+    console.error('Error updating order status:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Complete payment for order
+router.patch('/:id/complete-payment', authenticate, async (req, res) => {
+  try {
+    const { paymentMethod, paymentDetails, status, completedAt } = req.body;
+    
+    const order = await Order.findById(req.params.id);
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    
+    order.payment = {
+      method: paymentMethod,
+      status: 'paid',
+      amount: paymentDetails.amount,
+      transactionId: paymentDetails.transactionId,
+      timestamp: new Date()
+    };
+    
+    if (status) order.status = status;
+    if (completedAt) order.completedAt = new Date(completedAt);
+    order.completedBy = req.userId;
+    order.updatedAt = new Date();
+    
+    await order.save();
+    
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('order-updated', order);
+      io.emit('order-completed', order._id);
+    }
+    
+    res.json(order);
+  } catch (error) {
+    console.error('Error completing payment:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Add item to order
+router.post('/:id/items', authenticate, async (req, res) => {
+  try {
+    const { item } = req.body;
+    
+    if (!item || !item.id) {
+      return res.status(400).json({ error: 'Item ID is required' });
+    }
+    
+    const order = await Order.findById(req.params.id);
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    
     const newItem = {
       id: item.id,
       name: item.name || 'Unknown Item',
@@ -80,9 +174,6 @@ router.post('/:id/items', async (req, res) => {
       modifiedAt: new Date()
     };
     
-    console.log('Adding item to order:', newItem);
-    
-    // Check if item already exists
     const existingItem = order.items.find(i => i.id === newItem.id);
     if (existingItem) {
       existingItem.quantity += newItem.quantity;
@@ -116,10 +207,9 @@ router.post('/:id/items', async (req, res) => {
 });
 
 // Remove item from order
-router.delete('/:id/items/:itemId', async (req, res) => {
+router.delete('/:id/items/:itemId', authenticate, async (req, res) => {
   try {
     const order = await Order.findById(req.params.id);
-    
     if (!order) {
       return res.status(404).json({ error: 'Order not found' });
     }
@@ -129,10 +219,6 @@ router.delete('/:id/items/:itemId', async (req, res) => {
       return res.status(404).json({ error: 'Item not found' });
     }
     
-    // Mark as removed
-    const removedItem = order.items[itemIndex];
-    removedItem.isRemoved = true;
-    removedItem.removedAt = new Date();
     order.items.splice(itemIndex, 1);
     
     // Update totals
@@ -158,11 +244,10 @@ router.delete('/:id/items/:itemId', async (req, res) => {
   }
 });
 
-// Update item quantity - FIXED
-router.patch('/:id/items/:itemId', async (req, res) => {
+// Update item quantity
+router.patch('/:id/items/:itemId', authenticate, async (req, res) => {
   try {
     const { quantity } = req.body;
-    console.log(`Updating quantity for item ${req.params.itemId} to ${quantity}`);
     
     const order = await Order.findById(req.params.id);
     if (!order) {
@@ -202,45 +287,8 @@ router.patch('/:id/items/:itemId', async (req, res) => {
   }
 });
 
-// Update order status
-router.patch('/:id/status', async (req, res) => {
-  try {
-    const { status } = req.body;
-    const updateData = { 
-      status, 
-      updatedAt: new Date() 
-    };
-    
-    if (status === 'completed') {
-      updateData.completedAt = new Date();
-    }
-    
-    const order = await Order.findByIdAndUpdate(
-      req.params.id,
-      updateData,
-      { new: true }
-    );
-    
-    if (!order) {
-      return res.status(404).json({ error: 'Order not found' });
-    }
-    
-    const io = req.app.get('io');
-    if (io) {
-      io.emit('order-updated', order);
-      if (status === 'accepted') io.emit('order-accepted', order._id);
-      if (status === 'completed') io.emit('order-completed', order._id);
-    }
-    
-    res.json(order);
-  } catch (error) {
-    console.error('Error updating order status:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Update item status (for kitchen display)
-router.patch('/:id/items/:itemId/status', async (req, res) => {
+// Update item status
+router.patch('/:id/items/:itemId/status', authenticate, async (req, res) => {
   try {
     const { status } = req.body;
     const order = await Order.findById(req.params.id);
