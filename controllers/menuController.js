@@ -31,6 +31,7 @@ export const getMenuItems = async (req, res) => {
     
     res.json(enrichedItems);
   } catch (error) {
+    console.error('Error fetching menu items:', error);
     res.status(500).json({ error: error.message });
   }
 };
@@ -39,7 +40,6 @@ export const createMenuItem = async (req, res) => {
   try {
     const { name, price, category, prepTime, available, description, ingredients, calories } = req.body;
     
-    // Verify category exists
     if (category) {
       const categoryExists = await Category.findById(category);
       if (!categoryExists) {
@@ -60,8 +60,7 @@ export const createMenuItem = async (req, res) => {
     
     await menuItem.save();
     
-    // Return with category info
-    const categoryInfo = await Category.findById(category);
+    const categoryInfo = category ? await Category.findById(category) : null;
     const responseItem = menuItem.toObject();
     if (categoryInfo) {
       responseItem.categoryName = categoryInfo.name;
@@ -85,7 +84,6 @@ export const updateMenuItem = async (req, res) => {
       return res.status(404).json({ error: 'Menu item not found' });
     }
     
-    // Verify category exists if changing
     if (category && category !== menuItem.category) {
       const categoryExists = await Category.findById(category);
       if (!categoryExists) {
@@ -98,15 +96,14 @@ export const updateMenuItem = async (req, res) => {
     menuItem.category = category || menuItem.category;
     menuItem.prepTime = prepTime !== undefined ? prepTime : menuItem.prepTime;
     menuItem.available = available !== undefined ? available : menuItem.available;
-    menuItem.description = description || menuItem.description;
+    menuItem.description = description !== undefined ? description : menuItem.description;
     menuItem.ingredients = ingredients || menuItem.ingredients;
     menuItem.calories = calories || menuItem.calories;
     menuItem.updatedAt = new Date();
     
     await menuItem.save();
     
-    // Return with category info
-    const categoryInfo = await Category.findById(menuItem.category);
+    const categoryInfo = menuItem.category ? await Category.findById(menuItem.category) : null;
     const responseItem = menuItem.toObject();
     if (categoryInfo) {
       responseItem.categoryName = categoryInfo.name;
@@ -131,6 +128,7 @@ export const deleteMenuItem = async (req, res) => {
     
     res.json({ message: 'Menu item deleted successfully' });
   } catch (error) {
+    console.error('Error deleting menu item:', error);
     res.status(500).json({ error: error.message });
   }
 };
@@ -146,6 +144,7 @@ export const bulkUpdateAvailability = async (req, res) => {
     
     res.json({ message: 'Bulk update completed' });
   } catch (error) {
+    console.error('Error bulk updating availability:', error);
     res.status(500).json({ error: error.message });
   }
 };
@@ -155,6 +154,7 @@ export const getCategories = async (req, res) => {
     const categories = await Category.find({ isActive: true }).sort({ name: 1 });
     res.json(categories);
   } catch (error) {
+    console.error('Error fetching categories:', error);
     res.status(500).json({ error: error.message });
   }
 };
