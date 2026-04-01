@@ -8,7 +8,9 @@ const router = express.Router();
 // Get all categories (public)
 router.get('/', async (req, res) => {
   try {
+    console.log('Fetching all categories...');
     const categories = await Category.find({ isActive: true }).sort({ sortOrder: 1, name: 1 });
+    console.log(`Found ${categories.length} categories`);
     res.json(categories);
   } catch (error) {
     console.error('Error fetching categories:', error);
@@ -25,6 +27,7 @@ router.get('/:id', async (req, res) => {
     }
     res.json(category);
   } catch (error) {
+    console.error('Error fetching category:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -33,6 +36,8 @@ router.get('/:id', async (req, res) => {
 router.post('/', authenticate, authorize('admin', 'manager'), async (req, res) => {
   try {
     const { name, description, icon, bgColor, sortOrder } = req.body;
+    
+    console.log('Creating category:', { name, icon, bgColor });
     
     // Check if category already exists
     const existingCategory = await Category.findOne({ name: { $regex: new RegExp(`^${name}$`, 'i') } });
@@ -49,6 +54,7 @@ router.post('/', authenticate, authorize('admin', 'manager'), async (req, res) =
     });
     
     await category.save();
+    console.log('Category created:', category);
     res.status(201).json(category);
   } catch (error) {
     console.error('Error creating category:', error);
@@ -86,6 +92,7 @@ router.put('/:id', authenticate, authorize('admin', 'manager'), async (req, res)
     category.updatedAt = new Date();
     
     await category.save();
+    console.log('Category updated:', category);
     res.json(category);
   } catch (error) {
     console.error('Error updating category:', error);
@@ -101,7 +108,7 @@ router.delete('/:id', authenticate, authorize('admin'), async (req, res) => {
       return res.status(404).json({ error: 'Category not found' });
     }
     
-    // Check if category has items - fixed import issue
+    // Check if category has items
     const MenuItem = await import('../models/MenuItem.js').then(m => m.default);
     const itemsCount = await MenuItem.countDocuments({ category: req.params.id });
     if (itemsCount > 0) {
@@ -111,6 +118,7 @@ router.delete('/:id', authenticate, authorize('admin'), async (req, res) => {
     }
     
     await category.deleteOne();
+    console.log('Category deleted:', category.name);
     res.json({ message: 'Category deleted successfully' });
   } catch (error) {
     console.error('Error deleting category:', error);
