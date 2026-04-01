@@ -5,6 +5,9 @@ const orderItemSchema = new mongoose.Schema({
   name: { type: String, required: true },
   quantity: { type: Number, default: 1 },
   price: { type: Number, required: true },
+  categoryId: { type: String, default: null }, // Store category ID
+  categoryName: { type: String, default: '' }, // Store category name
+  categorySortOrder: { type: Number, default: 0 }, // Store sort order for sorting
   specialInstructions: String,
   status: { type: String, default: 'pending', enum: ['pending', 'preparing', 'completed'] },
   completedAt: Date,
@@ -35,7 +38,7 @@ const orderSchema = new mongoose.Schema({
   deliveryPlatform: {
     type: String,
     default: null,
-    enum: [null, 'home', 'zomato', 'swiggy']  // Allow null for non-delivery orders
+    enum: [null, 'home', 'zomato', 'swiggy']
   },
   deliveryAddress: {
     type: String,
@@ -78,13 +81,11 @@ const orderSchema = new mongoose.Schema({
 
 // Pre-save middleware to clean up fields
 orderSchema.pre('save', function(next) {
-  // Set deliveryPlatform to null for non-delivery orders
   if (this.orderType !== 'delivery') {
     this.deliveryPlatform = undefined;
     this.deliveryAddress = undefined;
   }
   
-  // Set payment method to null for pending orders
   if (!this.payment || !this.payment.method) {
     this.payment = {
       method: null,
