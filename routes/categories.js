@@ -1,4 +1,5 @@
 import express from 'express';
+import mongoose from 'mongoose';
 import Category from '../models/Category.js';
 import { authenticate, authorize } from '../middleware/auth.js';
 
@@ -77,7 +78,7 @@ router.put('/:id', authenticate, authorize('admin', 'manager'), async (req, res)
     }
     
     category.name = name || category.name;
-    category.description = description || category.description;
+    category.description = description !== undefined ? description : category.description;
     category.icon = icon || category.icon;
     category.bgColor = bgColor || category.bgColor;
     category.sortOrder = sortOrder !== undefined ? sortOrder : category.sortOrder;
@@ -100,8 +101,8 @@ router.delete('/:id', authenticate, authorize('admin'), async (req, res) => {
       return res.status(404).json({ error: 'Category not found' });
     }
     
-    // Check if category has items
-    const MenuItem = mongoose.model('MenuItem');
+    // Check if category has items - fixed import issue
+    const MenuItem = await import('../models/MenuItem.js').then(m => m.default);
     const itemsCount = await MenuItem.countDocuments({ category: req.params.id });
     if (itemsCount > 0) {
       return res.status(400).json({ 
