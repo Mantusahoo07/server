@@ -3,8 +3,7 @@ import mongoose from 'mongoose';
 const categorySchema = new mongoose.Schema({
   name: {
     type: String,
-    required: true,
-    unique: true
+    required: true
   },
   description: String,
   icon: {
@@ -33,7 +32,6 @@ const categorySchema = new mongoose.Schema({
   }
 });
 
-// Update timestamp on save
 categorySchema.pre('save', function(next) {
   this.updatedAt = new Date();
   next();
