@@ -17,6 +17,7 @@ import categoryRoutes from './routes/categories.js';
 import tableRoutes from './routes/tables.js';
 import settingRoutes from './routes/settings.js';
 import cartRoutes from './routes/cart.js';
+import businessRoutes from './routes/business.js';
 
 
 dotenv.config();
@@ -76,6 +77,7 @@ app.use('/api/payments', paymentRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/tables', tableRoutes);
 app.use('/api/cart', cartRoutes);
+app.use('/api/business', businessRoutes);
 
 // Settings route with error handling
 app.use('/api/settings', (req, res, next) => {
