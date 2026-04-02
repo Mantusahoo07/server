@@ -5,9 +5,9 @@ const orderItemSchema = new mongoose.Schema({
   name: { type: String, required: true },
   quantity: { type: Number, default: 1 },
   price: { type: Number, required: true },
-  categoryId: { type: String, default: null }, // Store category ID
-  categoryName: { type: String, default: '' }, // Store category name
-  categorySortOrder: { type: Number, default: 0 }, // Store sort order for sorting
+  categoryId: { type: String, default: null },
+  categoryName: { type: String, default: '' },
+  categorySortOrder: { type: Number, default: 0 },
   specialInstructions: String,
   status: { type: String, default: 'pending', enum: ['pending', 'preparing', 'completed'] },
   completedAt: Date,
@@ -48,7 +48,10 @@ const orderSchema = new mongoose.Schema({
   customer: {
     name: { type: String, default: 'Walk-In' },
     phone: String,
-    email: String
+    email: String,
+    address: String,
+    creditLimit: { type: Number, default: 0 },
+    outstandingAmount: { type: Number, default: 0 }
   },
   hasModifications: { type: Boolean, default: false },
   isAdditionalOrder: { type: Boolean, default: false },
@@ -61,12 +64,15 @@ const orderSchema = new mongoose.Schema({
     },
     status: {
       type: String,
-      enum: ['pending', 'paid', 'failed', 'refunded'],
+      enum: ['pending', 'paid', 'failed', 'refunded', 'credit_due'],
       default: 'pending'
     },
     amount: Number,
     transactionId: String,
-    timestamp: Date
+    timestamp: Date,
+    dueDate: Date,
+    customerName: String,
+    customerPhone: String
   },
   taxRate: { type: Number, default: 0 },
   serviceChargeRate: { type: Number, default: 0 },
@@ -79,7 +85,7 @@ const orderSchema = new mongoose.Schema({
   completedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null }
 });
 
-// Pre-save middleware to clean up fields
+// Pre-save middleware
 orderSchema.pre('save', function(next) {
   if (this.orderType !== 'delivery') {
     this.deliveryPlatform = undefined;
