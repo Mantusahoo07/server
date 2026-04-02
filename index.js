@@ -13,7 +13,6 @@ import orderRoutes from './routes/orders.js';
 import menuRoutes from './routes/menu.js';
 import reportRoutes from './routes/reports.js';
 import paymentRoutes from './routes/payments.js';
-//import { limiter } from './middleware/rateLimiter.js';
 import categoryRoutes from './routes/categories.js';
 import tableRoutes from './routes/tables.js';
 import settingRoutes from './routes/settings.js';
@@ -24,11 +23,23 @@ dotenv.config();
 
 const app = express();
 const httpServer = createServer(app);
+
+// Allowed origins
+const allowedOrigins = [
+  'http://localhost:3000',
+  'http://localhost:5173',
+  'https://pos-frontend.onrender.com',
+  'https://pos-system-d98.web.app',
+  'https://pos-system-d98.firebaseapp.com'
+];
+
+// Socket.io with updated CORS
 const io = new Server(httpServer, {
   cors: {
-    origin: process.env.CLIENT_URL || '*',
+    origin: allowedOrigins,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
-    credentials: true
+    credentials: true,
+    allowedHeaders: ['Content-Type', 'Authorization']
   }
 });
 
@@ -38,7 +49,7 @@ app.set('io', io);
 // Connect to MongoDB
 connectDB();
 
-// Security Middleware
+// Security Middleware - Disable strict CORS for socket.io
 app.use(helmet({
   contentSecurityPolicy: false,
   crossOriginResourcePolicy: { policy: "cross-origin" }
@@ -47,15 +58,7 @@ app.use(helmet({
 // Compression for better performance
 app.use(compression());
 
-// CORS configuration - ADDED Firebase domains
-const allowedOrigins = [
-  'http://localhost:3000',
-  'http://localhost:5173',
-  'https://pos-frontend.onrender.com',
-  'https://pos-system-d98.web.app',      // Added Firebase domain
-  'https://pos-system-d98.firebaseapp.com' // Added Firebase domain
-];
-
+// CORS middleware - Must come before routes
 app.use(cors({
   origin: function(origin, callback) {
     // Allow requests with no origin (like mobile apps or curl requests)
@@ -65,7 +68,7 @@ app.use(cors({
       callback(null, true);
     } else {
       console.log('CORS blocked origin:', origin);
-      // Still allow but log it - you can change to false to block
+      // For development, allow all origins
       callback(null, true);
     }
   },
@@ -80,9 +83,6 @@ app.options('*', cors());
 // Body parsing
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-// Rate limiting
-// app.use(limiter);
 
 // Make io accessible to routes via req
 app.use((req, res, next) => {
@@ -125,7 +125,7 @@ app.get('/', (req, res) => {
   });
 });
 
-// Health check endpoint for Render
+// Health check endpoint
 app.get('/health', (req, res) => {
   res.status(200).json({ 
     status: 'healthy', 
@@ -135,7 +135,7 @@ app.get('/health', (req, res) => {
   });
 });
 
-// 404 handler for undefined routes
+// 404 handler
 app.use((req, res) => {
   res.status(404).json({ 
     error: 'Route not found',
@@ -163,19 +163,6 @@ httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`🔌 Socket.io ready for connections`);
   console.log(`📡 API URL: http://localhost:${PORT}/api`);
   console.log(`✅ CORS enabled for:`, allowedOrigins);
-  console.log(`📋 Available endpoints:`);
-  console.log(`   - GET  /api/business      - Business details`);
-  console.log(`   - POST /api/business      - Save business details`);
-  console.log(`   - GET  /api/settings      - System settings`);
-  console.log(`   - POST /api/settings      - Update settings`);
-  console.log(`   - GET  /api/categories    - Categories list`);
-  console.log(`   - POST /api/categories    - Create category`);
-  console.log(`   - GET  /api/tables        - Tables list`);
-  console.log(`   - POST /api/tables        - Create table`);
-  console.log(`   - GET  /api/menu          - Menu items`);
-  console.log(`   - POST /api/menu          - Create menu item`);
-  console.log(`   - GET  /api/orders        - Orders list`);
-  console.log(`   - POST /api/orders        - Create order`);
 });
 
 // Graceful shutdown
@@ -187,5 +174,4 @@ process.on('SIGTERM', () => {
   });
 });
 
-// Export for testing
 export { app, httpServer, io };
