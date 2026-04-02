@@ -1,6 +1,6 @@
 import express from 'express';
 import Order from '../models/Order.js';
-import Customer from '../models/Customer.js';  // Only once at the top
+import Customer from '../models/Customer.js';
 import { authenticate, authorize } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -35,19 +35,7 @@ router.post('/', authenticate, async (req, res) => {
     
     if (orderData.orderType !== 'delivery') {
       delete orderData.deliveryPlatform;
-      delete orderData.deliveryAddress;
     }
-    
-    orderData.payment = {
-      method: null,
-      status: 'pending',
-      amount: orderData.total,
-      timestamp: new Date()
-    };
-    
-    orderData.createdBy = req.userId;
-    
-    console.log('Creating order:', JSON.stringify(orderData, null, 2));
     
     const order = new Order(orderData);
     await order.save();
@@ -62,90 +50,6 @@ router.post('/', authenticate, async (req, res) => {
     res.status(201).json(order);
   } catch (error) {
     console.error('Error creating order:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Update order status
-router.patch('/:id/status', authenticate, async (req, res) => {
-  try {
-    const { status } = req.body;
-    const updateData = { 
-      status, 
-      updatedAt: new Date() 
-    };
-    
-    if (status === 'completed') {
-      updateData.completedAt = new Date();
-      updateData.completedBy = req.userId;
-    }
-    
-    if (status === 'accepted') {
-      updateData.acceptedBy = req.userId;
-    }
-    
-    const order = await Order.findByIdAndUpdate(
-      req.params.id,
-      updateData,
-      { new: true }
-    );
-    
-    if (!order) {
-      return res.status(404).json({ error: 'Order not found' });
-    }
-    
-    const io = req.app.get('io');
-    if (io) {
-      io.emit('order-updated', order);
-      if (status === 'accepted') io.emit('order-accepted', order._id);
-      if (status === 'ready_for_billing') io.emit('order-ready-for-billing', order._id);
-      if (status === 'completed') io.emit('order-completed', order._id);
-    }
-    
-    res.json(order);
-  } catch (error) {
-    console.error('Error updating order status:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Complete payment for order
-router.patch('/:id/complete-payment', authenticate, async (req, res) => {
-  try {
-    const { paymentMethod, paymentDetails, status, completedAt } = req.body;
-    
-    const order = await Order.findById(req.params.id);
-    if (!order) {
-      return res.status(404).json({ error: 'Order not found' });
-    }
-    
-    order.payment = {
-      method: paymentMethod,
-      status: paymentMethod === 'credit' ? 'credit_due' : 'paid',
-      amount: paymentDetails.amount,
-      transactionId: paymentDetails.transactionId,
-      timestamp: new Date(),
-      dueDate: paymentDetails.dueDate,
-      customerName: paymentDetails.customerName,
-      customerPhone: paymentDetails.customerPhone
-    };
-    
-    if (status) order.status = status;
-    if (completedAt) order.completedAt = new Date(completedAt);
-    order.completedBy = req.userId;
-    order.updatedAt = new Date();
-    
-    await order.save();
-    
-    const io = req.app.get('io');
-    if (io) {
-      io.emit('order-updated', order);
-      if (status === 'completed') io.emit('order-completed', order._id);
-    }
-    
-    res.json(order);
-  } catch (error) {
-    console.error('Error completing payment:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -285,7 +189,50 @@ router.patch('/:id/items/:itemId', authenticate, async (req, res) => {
   }
 });
 
-// Update item status
+// Update order status
+router.patch('/:id/status', authenticate, async (req, res) => {
+  try {
+    const { status } = req.body;
+    const updateData = { 
+      status, 
+      updatedAt: new Date() 
+    };
+    
+    if (status === 'completed') {
+      updateData.completedAt = new Date();
+      updateData.completedBy = req.userId;
+    }
+    
+    if (status === 'accepted') {
+      updateData.acceptedBy = req.userId;
+    }
+    
+    const order = await Order.findByIdAndUpdate(
+      req.params.id,
+      updateData,
+      { new: true }
+    );
+    
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('order-updated', order);
+      if (status === 'accepted') io.emit('order-accepted', order._id);
+      if (status === 'ready_for_billing') io.emit('order-ready-for-billing', order._id);
+      if (status === 'completed') io.emit('order-completed', order._id);
+    }
+    
+    res.json(order);
+  } catch (error) {
+    console.error('Error updating order status:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update item status (for kitchen display)
 router.patch('/:id/items/:itemId/status', authenticate, async (req, res) => {
   try {
     const { status } = req.body;
@@ -319,10 +266,51 @@ router.patch('/:id/items/:itemId/status', authenticate, async (req, res) => {
   }
 });
 
+// Complete payment for order
+router.patch('/:id/complete-payment', authenticate, async (req, res) => {
+  try {
+    const { paymentMethod, paymentDetails, status, completedAt } = req.body;
+    
+    const order = await Order.findById(req.params.id);
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    
+    order.payment = {
+      method: paymentMethod,
+      status: paymentMethod === 'credit' ? 'credit_due' : 'paid',
+      amount: paymentDetails.amount,
+      transactionId: paymentDetails.transactionId,
+      timestamp: new Date(),
+      dueDate: paymentDetails.dueDate,
+      customerName: paymentDetails.customerName,
+      customerPhone: paymentDetails.customerPhone
+    };
+    
+    if (status) order.status = status;
+    if (completedAt) order.completedAt = new Date(completedAt);
+    order.completedBy = req.userId;
+    order.updatedAt = new Date();
+    
+    await order.save();
+    
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('order-updated', order);
+      if (status === 'completed') io.emit('order-completed', order._id);
+    }
+    
+    res.json(order);
+  } catch (error) {
+    console.error('Error completing payment:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Process credit sale
 router.post('/:id/credit-sale', authenticate, authorize('admin', 'manager', 'cashier'), async (req, res) => {
   try {
-    const { customerId, customerName, customerPhone, customerEmail, dueDate, notes } = req.body;
+    const { customerId, customerName, customerPhone, customerEmail, dueDate } = req.body;
     
     const order = await Order.findById(req.params.id);
     if (!order) {
@@ -338,7 +326,6 @@ router.post('/:id/credit-sale', authenticate, authorize('admin', 'manager', 'cas
     }
     
     if (!customer && customerName && customerPhone) {
-      // Create new customer
       customer = new Customer({
         name: customerName,
         phone: customerPhone,
@@ -348,14 +335,12 @@ router.post('/:id/credit-sale', authenticate, authorize('admin', 'manager', 'cas
       });
       await customer.save();
     } else if (customer) {
-      // Update customer outstanding amount
       customer.outstandingAmount = (customer.outstandingAmount || 0) + order.total;
       customer.totalPurchases = (customer.totalPurchases || 0) + order.total;
       customer.lastPurchaseDate = new Date();
       await customer.save();
     }
     
-    // Update order with credit payment
     order.payment = {
       method: 'credit',
       status: 'credit_due',
