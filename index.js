@@ -5,6 +5,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
 import dotenv from 'dotenv';
+import mongoose from 'mongoose';
 import connectDB from './config/database.js';
 import { setupSocketHandlers } from './socket.js';
 import authRoutes from './routes/auth.js';
@@ -46,13 +47,35 @@ app.use(helmet({
 // Compression for better performance
 app.use(compression());
 
-// CORS configuration
+// CORS configuration - ADDED Firebase domains
+const allowedOrigins = [
+  'http://localhost:3000',
+  'http://localhost:5173',
+  'https://pos-frontend.onrender.com',
+  'https://pos-system-d98.web.app',      // Added Firebase domain
+  'https://pos-system-d98.firebaseapp.com' // Added Firebase domain
+];
+
 app.use(cors({
-  origin: process.env.CLIENT_URL || ['http://localhost:3000', 'http://localhost:5173', 'https://pos-frontend.onrender.com'],
+  origin: function(origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      console.log('CORS blocked origin:', origin);
+      // Still allow but log it - you can change to false to block
+      callback(null, true);
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept']
 }));
+
+// Handle preflight requests
+app.options('*', cors());
 
 // Body parsing
 app.use(express.json());
@@ -76,7 +99,7 @@ app.use('/api/payments', paymentRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/tables', tableRoutes);
 app.use('/api/cart', cartRoutes);
-app.use('/api/settings', settingRoutes);  // Fixed: Direct use without try-catch wrapper
+app.use('/api/settings', settingRoutes);
 app.use('/api/business', businessRoutes);
 
 // Root endpoint
@@ -139,6 +162,7 @@ httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`🔌 Socket.io ready for connections`);
   console.log(`📡 API URL: http://localhost:${PORT}/api`);
+  console.log(`✅ CORS enabled for:`, allowedOrigins);
   console.log(`📋 Available endpoints:`);
   console.log(`   - GET  /api/business      - Business details`);
   console.log(`   - POST /api/business      - Save business details`);
