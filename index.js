@@ -18,6 +18,7 @@ import tableRoutes from './routes/tables.js';
 import settingRoutes from './routes/settings.js';
 import cartRoutes from './routes/cart.js';
 import businessRoutes from './routes/business.js';
+import customerRoutes from './routes/customers.js';
 
 dotenv.config();
 
@@ -101,6 +102,7 @@ app.use('/api/tables', tableRoutes);
 app.use('/api/cart', cartRoutes);
 app.use('/api/settings', settingRoutes);
 app.use('/api/business', businessRoutes);
+app.use('/api/customers', customerRoutes);
 
 // Root endpoint
 app.get('/', (req, res) => {
