@@ -48,7 +48,6 @@ router.post('/', authenticate, authorize('admin', 'manager', 'cashier'), async (
   try {
     const { name, phone, email, address, gst, creditLimit } = req.body;
     
-    // Check if customer already exists
     const existingCustomer = await Customer.findOne({ phone });
     if (existingCustomer) {
       return res.status(400).json({ error: 'Customer with this phone number already exists' });
@@ -107,7 +106,6 @@ router.delete('/:id', authenticate, authorize('admin'), async (req, res) => {
       return res.status(404).json({ error: 'Customer not found' });
     }
     
-    // Check if customer has pending credit orders
     const Order = await import('../models/Order.js').then(m => m.default);
     const pendingOrders = await Order.countDocuments({
       'payment.method': 'credit',
@@ -125,35 +123,6 @@ router.delete('/:id', authenticate, authorize('admin'), async (req, res) => {
     res.json({ message: 'Customer deleted successfully' });
   } catch (error) {
     console.error('Error deleting customer:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Get customer credit summary
-router.get('/:id/credit-summary', authenticate, async (req, res) => {
-  try {
-    const customer = await Customer.findById(req.params.id);
-    if (!customer) {
-      return res.status(404).json({ error: 'Customer not found' });
-    }
-    
-    const Order = await import('../models/Order.js').then(m => m.default);
-    const creditOrders = await Order.find({
-      'payment.method': 'credit',
-      'payment.status': 'credit_due',
-      'customer.phone': customer.phone
-    }).sort({ createdAt: -1 });
-    
-    const totalDue = creditOrders.reduce((sum, order) => sum + (order.payment?.amount || order.total), 0);
-    
-    res.json({
-      customer,
-      creditOrders,
-      totalDue,
-      availableCredit: customer.creditLimit - customer.outstandingAmount
-    });
-  } catch (error) {
-    console.error('Error fetching credit summary:', error);
     res.status(500).json({ error: error.message });
   }
 });
