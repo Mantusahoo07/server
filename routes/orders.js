@@ -1,7 +1,6 @@
-import Customer from '../models/Customer.js';
 import express from 'express';
 import Order from '../models/Order.js';
-import Customer from '../models/Customer.js';
+import Customer from '../models/Customer.js';  // Only once at the top
 import { authenticate, authorize } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -34,13 +33,11 @@ router.post('/', authenticate, async (req, res) => {
   try {
     const orderData = { ...req.body };
     
-    // Clean up data for non-delivery orders
     if (orderData.orderType !== 'delivery') {
       delete orderData.deliveryPlatform;
       delete orderData.deliveryAddress;
     }
     
-    // Ensure payment method is null for new orders
     orderData.payment = {
       method: null,
       status: 'pending',
@@ -48,7 +45,6 @@ router.post('/', authenticate, async (req, res) => {
       timestamp: new Date()
     };
     
-    // Add created by user
     orderData.createdBy = req.userId;
     
     console.log('Creating order:', JSON.stringify(orderData, null, 2));
@@ -125,10 +121,13 @@ router.patch('/:id/complete-payment', authenticate, async (req, res) => {
     
     order.payment = {
       method: paymentMethod,
-      status: 'paid',
+      status: paymentMethod === 'credit' ? 'credit_due' : 'paid',
       amount: paymentDetails.amount,
       transactionId: paymentDetails.transactionId,
-      timestamp: new Date()
+      timestamp: new Date(),
+      dueDate: paymentDetails.dueDate,
+      customerName: paymentDetails.customerName,
+      customerPhone: paymentDetails.customerPhone
     };
     
     if (status) order.status = status;
@@ -141,7 +140,7 @@ router.patch('/:id/complete-payment', authenticate, async (req, res) => {
     const io = req.app.get('io');
     if (io) {
       io.emit('order-updated', order);
-      io.emit('order-completed', order._id);
+      if (status === 'completed') io.emit('order-completed', order._id);
     }
     
     res.json(order);
@@ -151,8 +150,176 @@ router.patch('/:id/complete-payment', authenticate, async (req, res) => {
   }
 });
 
-// Process credit sale (NEW ENDPOINT)
-// Process credit sale - Add this to your routes/orders.js
+// Add item to order
+router.post('/:id/items', authenticate, async (req, res) => {
+  try {
+    const { item } = req.body;
+    
+    if (!item || !item.id) {
+      return res.status(400).json({ error: 'Item ID is required' });
+    }
+    
+    const order = await Order.findById(req.params.id);
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    
+    const newItem = {
+      id: item.id,
+      name: item.name || 'Unknown Item',
+      quantity: item.quantity || 1,
+      price: item.price || 0,
+      specialInstructions: item.specialInstructions || '',
+      status: 'pending',
+      isModified: true,
+      modifiedAt: new Date()
+    };
+    
+    const existingItem = order.items.find(i => i.id === newItem.id);
+    if (existingItem) {
+      existingItem.quantity += newItem.quantity;
+      existingItem.isModified = true;
+      existingItem.modifiedAt = new Date();
+    } else {
+      order.items.push(newItem);
+    }
+    
+    order.subtotal = order.items.reduce((sum, i) => sum + (i.price * i.quantity), 0);
+    order.tax = order.subtotal * (order.taxRate / 100);
+    order.serviceCharge = order.subtotal * (order.serviceChargeRate / 100);
+    order.total = order.subtotal + order.tax + order.serviceCharge;
+    order.updatedAt = new Date();
+    order.hasModifications = true;
+    
+    await order.save();
+    
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('order-updated', order);
+      io.emit('order-item-added', { orderId: order._id, item: newItem });
+    }
+    
+    res.json(order);
+  } catch (error) {
+    console.error('Error adding item:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Remove item from order
+router.delete('/:id/items/:itemId', authenticate, async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.id);
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    
+    const itemIndex = order.items.findIndex(i => i.id === req.params.itemId);
+    if (itemIndex === -1) {
+      return res.status(404).json({ error: 'Item not found' });
+    }
+    
+    order.items.splice(itemIndex, 1);
+    
+    order.subtotal = order.items.reduce((sum, i) => sum + (i.price * i.quantity), 0);
+    order.tax = order.subtotal * (order.taxRate / 100);
+    order.serviceCharge = order.subtotal * (order.serviceChargeRate / 100);
+    order.total = order.subtotal + order.tax + order.serviceCharge;
+    order.updatedAt = new Date();
+    order.hasModifications = true;
+    
+    await order.save();
+    
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('order-updated', order);
+      io.emit('order-item-removed', { orderId: order._id, itemId: req.params.itemId });
+    }
+    
+    res.json(order);
+  } catch (error) {
+    console.error('Error removing item:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update item quantity
+router.patch('/:id/items/:itemId', authenticate, async (req, res) => {
+  try {
+    const { quantity } = req.body;
+    
+    const order = await Order.findById(req.params.id);
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    
+    const item = order.items.find(i => i.id === req.params.itemId);
+    if (!item) {
+      return res.status(404).json({ error: 'Item not found' });
+    }
+    
+    const oldQuantity = item.quantity;
+    item.quantity = quantity;
+    item.isModified = true;
+    item.modifiedAt = new Date();
+    item.oldQuantity = oldQuantity;
+    
+    order.subtotal = order.items.reduce((sum, i) => sum + (i.price * i.quantity), 0);
+    order.tax = order.subtotal * (order.taxRate / 100);
+    order.serviceCharge = order.subtotal * (order.serviceChargeRate / 100);
+    order.total = order.subtotal + order.tax + order.serviceCharge;
+    order.updatedAt = new Date();
+    order.hasModifications = true;
+    
+    await order.save();
+    
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('order-updated', order);
+    }
+    
+    res.json(order);
+  } catch (error) {
+    console.error('Error updating quantity:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update item status
+router.patch('/:id/items/:itemId/status', authenticate, async (req, res) => {
+  try {
+    const { status } = req.body;
+    const order = await Order.findById(req.params.id);
+    
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    
+    const item = order.items.find(i => i.id === req.params.itemId);
+    if (!item) {
+      return res.status(404).json({ error: 'Item not found' });
+    }
+    
+    item.status = status;
+    if (status === 'completed') {
+      item.completedAt = new Date();
+    }
+    
+    await order.save();
+    
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('order-updated', order);
+    }
+    
+    res.json(order);
+  } catch (error) {
+    console.error('Error updating item status:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Process credit sale
 router.post('/:id/credit-sale', authenticate, authorize('admin', 'manager', 'cashier'), async (req, res) => {
   try {
     const { customerId, customerName, customerPhone, customerEmail, dueDate, notes } = req.body;
@@ -219,274 +386,6 @@ router.post('/:id/credit-sale', authenticate, authorize('admin', 'manager', 'cas
     res.json(order);
   } catch (error) {
     console.error('Error processing credit sale:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Add item to order
-router.post('/:id/items', authenticate, async (req, res) => {
-  try {
-    const { item } = req.body;
-    
-    if (!item || !item.id) {
-      return res.status(400).json({ error: 'Item ID is required' });
-    }
-    
-    const order = await Order.findById(req.params.id);
-    if (!order) {
-      return res.status(404).json({ error: 'Order not found' });
-    }
-    
-    const newItem = {
-      id: item.id,
-      name: item.name || 'Unknown Item',
-      quantity: item.quantity || 1,
-      price: item.price || 0,
-      specialInstructions: item.specialInstructions || '',
-      status: 'pending',
-      isModified: true,
-      modifiedAt: new Date()
-    };
-    
-    const existingItem = order.items.find(i => i.id === newItem.id);
-    if (existingItem) {
-      existingItem.quantity += newItem.quantity;
-      existingItem.isModified = true;
-      existingItem.modifiedAt = new Date();
-    } else {
-      order.items.push(newItem);
-    }
-    
-    // Update totals
-    order.subtotal = order.items.reduce((sum, i) => sum + (i.price * i.quantity), 0);
-    order.tax = order.subtotal * (order.taxRate / 100);
-    order.serviceCharge = order.subtotal * (order.serviceChargeRate / 100);
-    order.total = order.subtotal + order.tax + order.serviceCharge;
-    order.updatedAt = new Date();
-    order.hasModifications = true;
-    
-    await order.save();
-    
-    const io = req.app.get('io');
-    if (io) {
-      io.emit('order-updated', order);
-      io.emit('order-item-added', { orderId: order._id, item: newItem });
-    }
-    
-    res.json(order);
-  } catch (error) {
-    console.error('Error adding item:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Remove item from order
-router.delete('/:id/items/:itemId', authenticate, async (req, res) => {
-  try {
-    const order = await Order.findById(req.params.id);
-    if (!order) {
-      return res.status(404).json({ error: 'Order not found' });
-    }
-    
-    const itemIndex = order.items.findIndex(i => i.id === req.params.itemId);
-    if (itemIndex === -1) {
-      return res.status(404).json({ error: 'Item not found' });
-    }
-    
-    order.items.splice(itemIndex, 1);
-    
-    // Update totals
-    order.subtotal = order.items.reduce((sum, i) => sum + (i.price * i.quantity), 0);
-    order.tax = order.subtotal * (order.taxRate / 100);
-    order.serviceCharge = order.subtotal * (order.serviceChargeRate / 100);
-    order.total = order.subtotal + order.tax + order.serviceCharge;
-    order.updatedAt = new Date();
-    order.hasModifications = true;
-    
-    await order.save();
-    
-    const io = req.app.get('io');
-    if (io) {
-      io.emit('order-updated', order);
-      io.emit('order-item-removed', { orderId: order._id, itemId: req.params.itemId });
-    }
-    
-    res.json(order);
-  } catch (error) {
-    console.error('Error removing item:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Update item quantity
-router.patch('/:id/items/:itemId', authenticate, async (req, res) => {
-  try {
-    const { quantity } = req.body;
-    
-    const order = await Order.findById(req.params.id);
-    if (!order) {
-      return res.status(404).json({ error: 'Order not found' });
-    }
-    
-    const item = order.items.find(i => i.id === req.params.itemId);
-    if (!item) {
-      return res.status(404).json({ error: 'Item not found' });
-    }
-    
-    const oldQuantity = item.quantity;
-    item.quantity = quantity;
-    item.isModified = true;
-    item.modifiedAt = new Date();
-    item.oldQuantity = oldQuantity;
-    
-    // Update totals
-    order.subtotal = order.items.reduce((sum, i) => sum + (i.price * i.quantity), 0);
-    order.tax = order.subtotal * (order.taxRate / 100);
-    order.serviceCharge = order.subtotal * (order.serviceChargeRate / 100);
-    order.total = order.subtotal + order.tax + order.serviceCharge;
-    order.updatedAt = new Date();
-    order.hasModifications = true;
-    
-    await order.save();
-    
-    const io = req.app.get('io');
-    if (io) {
-      io.emit('order-updated', order);
-    }
-    
-    res.json(order);
-  } catch (error) {
-    console.error('Error updating quantity:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Update item status
-router.patch('/:id/items/:itemId/status', authenticate, async (req, res) => {
-  try {
-    const { status } = req.body;
-    const order = await Order.findById(req.params.id);
-    
-    if (!order) {
-      return res.status(404).json({ error: 'Order not found' });
-    }
-    
-    const item = order.items.find(i => i.id === req.params.itemId);
-    if (!item) {
-      return res.status(404).json({ error: 'Item not found' });
-    }
-    
-    item.status = status;
-    if (status === 'completed') {
-      item.completedAt = new Date();
-    }
-    
-    await order.save();
-    
-    const io = req.app.get('io');
-    if (io) {
-      io.emit('order-updated', order);
-    }
-    
-    res.json(order);
-  } catch (error) {
-    console.error('Error updating item status:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Get credit sales report
-router.get('/reports/credit-sales', authenticate, authorize('admin', 'manager'), async (req, res) => {
-  try {
-    const { startDate, endDate } = req.query;
-    const query = {
-      'payment.method': 'credit',
-      'payment.status': 'credit_due'
-    };
-    
-    if (startDate && endDate) {
-      query.createdAt = {
-        $gte: new Date(startDate),
-        $lte: new Date(endDate)
-      };
-    }
-    
-    const creditSales = await Order.find(query).sort({ createdAt: -1 });
-    
-    const totalDue = creditSales.reduce((sum, order) => sum + (order.payment?.amount || order.total), 0);
-    const customerSummary = {};
-    
-    creditSales.forEach(order => {
-      const customerKey = order.customer?.phone || 'unknown';
-      if (!customerSummary[customerKey]) {
-        customerSummary[customerKey] = {
-          name: order.customer?.name || 'Unknown',
-          phone: order.customer?.phone || 'Unknown',
-          totalDue: 0,
-          orders: []
-        };
-      }
-      customerSummary[customerKey].totalDue += (order.payment?.amount || order.total);
-      customerSummary[customerKey].orders.push({
-        orderNumber: order.orderNumber,
-        amount: order.payment?.amount || order.total,
-        date: order.createdAt,
-        dueDate: order.payment?.dueDate
-      });
-    });
-    
-    res.json({
-      totalCreditSales: creditSales.length,
-      totalDue,
-      creditSales,
-      customerSummary: Object.values(customerSummary)
-    });
-  } catch (error) {
-    console.error('Error fetching credit sales report:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Settle credit payment
-router.patch('/:id/settle-credit', authenticate, authorize('admin', 'manager', 'cashier'), async (req, res) => {
-  try {
-    const { paymentMethod, amount, transactionId } = req.body;
-    
-    const order = await Order.findById(req.params.id);
-    if (!order) {
-      return res.status(404).json({ error: 'Order not found' });
-    }
-    
-    if (order.payment?.method !== 'credit' || order.payment?.status !== 'credit_due') {
-      return res.status(400).json({ error: 'Order is not a pending credit sale' });
-    }
-    
-    // Update order payment status
-    order.payment.status = 'paid';
-    order.payment.settledAt = new Date();
-    order.payment.settledMethod = paymentMethod;
-    order.payment.settledTransactionId = transactionId;
-    order.updatedAt = new Date();
-    
-    await order.save();
-    
-    // Update customer outstanding amount
-    if (order.customer?.phone) {
-      const customer = await Customer.findOne({ phone: order.customer.phone });
-      if (customer) {
-        customer.outstandingAmount = Math.max(0, (customer.outstandingAmount || 0) - (amount || order.total));
-        await customer.save();
-      }
-    }
-    
-    const io = req.app.get('io');
-    if (io) {
-      io.emit('order-updated', order);
-    }
-    
-    res.json(order);
-  } catch (error) {
-    console.error('Error settling credit:', error);
     res.status(500).json({ error: error.message });
   }
 });
