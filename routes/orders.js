@@ -152,6 +152,7 @@ router.patch('/:id/complete-payment', authenticate, async (req, res) => {
 });
 
 // Process credit sale (NEW ENDPOINT)
+// Process credit sale - Add this to your routes/orders.js
 router.post('/:id/credit-sale', authenticate, authorize('admin', 'manager', 'cashier'), async (req, res) => {
   try {
     const { customerId, customerName, customerPhone, customerEmail, dueDate, notes } = req.body;
@@ -176,19 +177,15 @@ router.post('/:id/credit-sale', authenticate, authorize('admin', 'manager', 'cas
         phone: customerPhone,
         email: customerEmail || '',
         creditLimit: 0,
-        outstandingAmount: order.total,
-        totalPurchases: order.total,
-        lastPurchaseDate: new Date()
+        outstandingAmount: order.total
       });
       await customer.save();
-      console.log('New customer created:', customer.name);
     } else if (customer) {
       // Update customer outstanding amount
       customer.outstandingAmount = (customer.outstandingAmount || 0) + order.total;
       customer.totalPurchases = (customer.totalPurchases || 0) + order.total;
       customer.lastPurchaseDate = new Date();
       await customer.save();
-      console.log('Customer updated:', customer.name, 'Outstanding:', customer.outstandingAmount);
     }
     
     // Update order with credit payment
@@ -217,10 +214,8 @@ router.post('/:id/credit-sale', authenticate, authorize('admin', 'manager', 'cas
     const io = req.app.get('io');
     if (io) {
       io.emit('order-updated', order);
-      io.emit('order-completed', order._id);
     }
     
-    console.log('✅ Credit sale processed for order:', order.orderNumber);
     res.json(order);
   } catch (error) {
     console.error('Error processing credit sale:', error);
