@@ -1,6 +1,7 @@
 import express from 'express';
 import Order from '../models/Order.js';
-import { authenticate } from '../middleware/auth.js';
+import Customer from '../models/Customer.js';
+import { authenticate, authorize } from '../middleware/auth.js';
 
 const router = express.Router();
 
@@ -145,6 +146,83 @@ router.patch('/:id/complete-payment', authenticate, async (req, res) => {
     res.json(order);
   } catch (error) {
     console.error('Error completing payment:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Process credit sale (NEW ENDPOINT)
+router.post('/:id/credit-sale', authenticate, authorize('admin', 'manager', 'cashier'), async (req, res) => {
+  try {
+    const { customerId, customerName, customerPhone, customerEmail, dueDate, notes } = req.body;
+    
+    const order = await Order.findById(req.params.id);
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    
+    // Find or create customer
+    let customer = null;
+    if (customerId) {
+      customer = await Customer.findById(customerId);
+    } else if (customerPhone) {
+      customer = await Customer.findOne({ phone: customerPhone });
+    }
+    
+    if (!customer && customerName && customerPhone) {
+      // Create new customer
+      customer = new Customer({
+        name: customerName,
+        phone: customerPhone,
+        email: customerEmail || '',
+        creditLimit: 0,
+        outstandingAmount: order.total,
+        totalPurchases: order.total,
+        lastPurchaseDate: new Date()
+      });
+      await customer.save();
+      console.log('New customer created:', customer.name);
+    } else if (customer) {
+      // Update customer outstanding amount
+      customer.outstandingAmount = (customer.outstandingAmount || 0) + order.total;
+      customer.totalPurchases = (customer.totalPurchases || 0) + order.total;
+      customer.lastPurchaseDate = new Date();
+      await customer.save();
+      console.log('Customer updated:', customer.name, 'Outstanding:', customer.outstandingAmount);
+    }
+    
+    // Update order with credit payment
+    order.payment = {
+      method: 'credit',
+      status: 'credit_due',
+      amount: order.total,
+      transactionId: `CREDIT_${Date.now()}`,
+      timestamp: new Date(),
+      dueDate: dueDate ? new Date(dueDate) : null,
+      customerName: customer?.name || customerName,
+      customerPhone: customer?.phone || customerPhone
+    };
+    
+    order.status = 'completed';
+    order.completedAt = new Date();
+    order.completedBy = req.userId;
+    order.customer = {
+      name: customer?.name || customerName,
+      phone: customer?.phone || customerPhone,
+      email: customer?.email || customerEmail
+    };
+    
+    await order.save();
+    
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('order-updated', order);
+      io.emit('order-completed', order._id);
+    }
+    
+    console.log('✅ Credit sale processed for order:', order.orderNumber);
+    res.json(order);
+  } catch (error) {
+    console.error('Error processing credit sale:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -317,6 +395,102 @@ router.patch('/:id/items/:itemId/status', authenticate, async (req, res) => {
     res.json(order);
   } catch (error) {
     console.error('Error updating item status:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get credit sales report
+router.get('/reports/credit-sales', authenticate, authorize('admin', 'manager'), async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+    const query = {
+      'payment.method': 'credit',
+      'payment.status': 'credit_due'
+    };
+    
+    if (startDate && endDate) {
+      query.createdAt = {
+        $gte: new Date(startDate),
+        $lte: new Date(endDate)
+      };
+    }
+    
+    const creditSales = await Order.find(query).sort({ createdAt: -1 });
+    
+    const totalDue = creditSales.reduce((sum, order) => sum + (order.payment?.amount || order.total), 0);
+    const customerSummary = {};
+    
+    creditSales.forEach(order => {
+      const customerKey = order.customer?.phone || 'unknown';
+      if (!customerSummary[customerKey]) {
+        customerSummary[customerKey] = {
+          name: order.customer?.name || 'Unknown',
+          phone: order.customer?.phone || 'Unknown',
+          totalDue: 0,
+          orders: []
+        };
+      }
+      customerSummary[customerKey].totalDue += (order.payment?.amount || order.total);
+      customerSummary[customerKey].orders.push({
+        orderNumber: order.orderNumber,
+        amount: order.payment?.amount || order.total,
+        date: order.createdAt,
+        dueDate: order.payment?.dueDate
+      });
+    });
+    
+    res.json({
+      totalCreditSales: creditSales.length,
+      totalDue,
+      creditSales,
+      customerSummary: Object.values(customerSummary)
+    });
+  } catch (error) {
+    console.error('Error fetching credit sales report:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Settle credit payment
+router.patch('/:id/settle-credit', authenticate, authorize('admin', 'manager', 'cashier'), async (req, res) => {
+  try {
+    const { paymentMethod, amount, transactionId } = req.body;
+    
+    const order = await Order.findById(req.params.id);
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    
+    if (order.payment?.method !== 'credit' || order.payment?.status !== 'credit_due') {
+      return res.status(400).json({ error: 'Order is not a pending credit sale' });
+    }
+    
+    // Update order payment status
+    order.payment.status = 'paid';
+    order.payment.settledAt = new Date();
+    order.payment.settledMethod = paymentMethod;
+    order.payment.settledTransactionId = transactionId;
+    order.updatedAt = new Date();
+    
+    await order.save();
+    
+    // Update customer outstanding amount
+    if (order.customer?.phone) {
+      const customer = await Customer.findOne({ phone: order.customer.phone });
+      if (customer) {
+        customer.outstandingAmount = Math.max(0, (customer.outstandingAmount || 0) - (amount || order.total));
+        await customer.save();
+      }
+    }
+    
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('order-updated', order);
+    }
+    
+    res.json(order);
+  } catch (error) {
+    console.error('Error settling credit:', error);
     res.status(500).json({ error: error.message });
   }
 });
