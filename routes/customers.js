@@ -57,9 +57,9 @@ router.post('/', authenticate, authorize('admin', 'manager', 'cashier'), async (
     const customer = new Customer({
       name,
       phone,
-      email,
-      address,
-      gst,
+      email: email || '',
+      address: address || '',
+      gst: gst || '',
       creditLimit: creditLimit || 0,
       outstandingAmount: 0
     });
@@ -84,9 +84,9 @@ router.put('/:id', authenticate, authorize('admin', 'manager'), async (req, res)
     
     if (name) customer.name = name;
     if (phone) customer.phone = phone;
-    if (email) customer.email = email;
-    if (address) customer.address = address;
-    if (gst) customer.gst = gst;
+    if (email !== undefined) customer.email = email;
+    if (address !== undefined) customer.address = address;
+    if (gst !== undefined) customer.gst = gst;
     if (creditLimit !== undefined) customer.creditLimit = creditLimit;
     if (isActive !== undefined) customer.isActive = isActive;
     customer.updatedAt = new Date();
