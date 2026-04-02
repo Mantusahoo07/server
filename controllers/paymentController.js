@@ -2,30 +2,53 @@ import Razorpay from 'razorpay';
 import crypto from 'crypto';
 import Order from '../models/Order.js';
 
-const razorpay = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID,
-  key_secret: process.env.RAZORPAY_KEY_SECRET
-});
+// Initialize Razorpay with error handling
+let razorpay;
+try {
+  razorpay = new Razorpay({
+    key_id: process.env.RAZORPAY_KEY_ID,
+    key_secret: process.env.RAZORPAY_KEY_SECRET
+  });
+  console.log('Razorpay initialized successfully');
+} catch (error) {
+  console.error('Razorpay initialization error:', error);
+}
 
 export const createOrder = async (req, res) => {
   try {
     const { amount, currency, receipt } = req.body;
     
-    console.log('Creating Razorpay order:', { amount, currency, receipt });
+    console.log('Creating Razorpay order with params:', { amount, currency, receipt });
+    console.log('Razorpay Key ID:', process.env.RAZORPAY_KEY_ID ? 'Present' : 'Missing');
+    console.log('Razorpay Key Secret:', process.env.RAZORPAY_KEY_SECRET ? 'Present' : 'Missing');
+    
+    if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
+      console.error('Razorpay credentials missing');
+      return res.status(500).json({ 
+        error: 'Payment gateway not configured',
+        details: 'Razorpay credentials missing'
+      });
+    }
     
     const options = {
-      amount: amount, // amount in paise
+      amount: Number(amount), // amount in paise
       currency: currency || 'INR',
       receipt: receipt,
       payment_capture: 1
     };
     
+    console.log('Razorpay order options:', options);
+    
     const order = await razorpay.orders.create(options);
-    console.log('Razorpay order created:', order);
+    console.log('Razorpay order created successfully:', order.id);
     res.json(order);
   } catch (error) {
     console.error('Razorpay order creation error:', error);
-    res.status(500).json({ error: error.message });
+    console.error('Error details:', error.error);
+    res.status(500).json({ 
+      error: error.error?.description || error.message || 'Failed to create payment order',
+      details: error.error
+    });
   }
 };
 
@@ -33,7 +56,7 @@ export const verifyPayment = async (req, res) => {
   try {
     const { orderId, paymentId, signature } = req.body;
     
-    console.log('Verifying payment:', { orderId, paymentId, signature });
+    console.log('Verifying payment:', { orderId, paymentId });
     
     const body = orderId + '|' + paymentId;
     const expectedSignature = crypto
@@ -44,21 +67,10 @@ export const verifyPayment = async (req, res) => {
     const isAuthentic = expectedSignature === signature;
     
     if (isAuthentic) {
-      // Update order with payment details
-      await Order.findOneAndUpdate(
-        { 'payment.orderId': orderId },
-        {
-          'payment.status': 'completed',
-          'payment.paymentId': paymentId,
-          'payment.verifiedAt': new Date(),
-          'payment.method': 'card'
-        }
-      );
-      
-      console.log('Payment verified successfully');
+      console.log('Payment verified successfully for order:', orderId);
       res.json({ success: true });
     } else {
-      console.log('Invalid signature');
+      console.log('Invalid signature for payment:', paymentId);
       res.status(400).json({ success: false, error: 'Invalid signature' });
     }
   } catch (error) {
@@ -78,16 +90,6 @@ export const refundPayment = async (req, res) => {
       }
     });
     
-    await Order.findOneAndUpdate(
-      { 'payment.paymentId': paymentId },
-      {
-        status: 'refunded',
-        'payment.refundId': refund.id,
-        'payment.refundAmount': amount,
-        'payment.refundedAt': new Date()
-      }
-    );
-    
     res.json({ success: true, refund });
   } catch (error) {
     console.error('Refund error:', error);
@@ -105,7 +107,6 @@ export const getPaymentStatus = async (req, res) => {
   }
 };
 
-// Credit sale endpoint
 export const creditSale = async (req, res) => {
   try {
     const { orderId, customerName, customerPhone, customerEmail, dueDate, amount } = req.body;
