@@ -1,3 +1,4 @@
+import Customer from '../models/Customer.js';
 import express from 'express';
 import Order from '../models/Order.js';
 import Customer from '../models/Customer.js';
