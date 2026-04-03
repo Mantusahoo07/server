@@ -48,57 +48,66 @@ router.get('/:id', authenticate, async (req, res) => {
 });
 
 // Create new order
-router.post('/', authenticate, async (req, res) => {
+// Add item to order - Make sure it triggers modifications
+router.post('/:id/items', authenticate, async (req, res) => {
   try {
-    const orderData = { ...req.body };
+    const { item } = req.body;
     
-    const lastOrder = await Order.findOne().sort({ orderNumber: -1 });
-    const orderNumber = lastOrder ? lastOrder.orderNumber + 1 : 1001;
-    
-    // Handle table session for dine-in orders
-    if (orderData.orderType === 'dine-in' && orderData.tableNumber) {
-      const existingActiveOrder = await Order.findOne({
-        tableNumber: orderData.tableNumber,
-        status: { $in: ['pending', 'accepted', 'preparing', 'hold'] },
-        'payment.status': { $ne: 'paid' }
-      });
-      
-      if (existingActiveOrder) {
-        orderData.isAdditionalOrder = true;
-        orderData.parentOrderId = existingActiveOrder._id;
-        orderData.tableSessionId = existingActiveOrder.tableSessionId || existingActiveOrder._id.toString();
-        console.log(`Additional order for table ${orderData.tableNumber}, session: ${orderData.tableSessionId}`);
-      } else {
-        orderData.isAdditionalOrder = false;
-        orderData.parentOrderId = null;
-        orderData.tableSessionId = `table_${orderData.tableNumber}_${Date.now()}`;
-        console.log(`New table session started for table ${orderData.tableNumber}, session: ${orderData.tableSessionId}`);
-      }
+    if (!item || !item.id) {
+      return res.status(400).json({ error: 'Item ID is required' });
     }
     
-    const order = new Order({
-      ...orderData,
-      orderNumber,
-      createdBy: req.userId,
-      timerStart: new Date(),
-      hasModifications: false
-    });
+    const order = await Order.findById(req.params.id);
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    
+    const newItem = {
+      id: item.id,
+      name: item.name || 'Unknown Item',
+      quantity: item.quantity || 1,
+      price: item.price || 0,
+      specialInstructions: item.specialInstructions || '',
+      status: 'pending',
+      isModified: true,
+      isRemoved: false,
+      modifiedAt: new Date(),
+      categoryId: item.categoryId,
+      categoryName: item.categoryName,
+      categorySortOrder: item.categorySortOrder || 999
+    };
+    
+    const existingItem = order.items.find(i => i.id === newItem.id);
+    if (existingItem) {
+      existingItem.oldQuantity = existingItem.quantity;
+      existingItem.quantity += newItem.quantity;
+      existingItem.isModified = true;
+      existingItem.modifiedAt = new Date();
+    } else {
+      order.items.push(newItem);
+    }
+    
+    // Update totals
+    order.subtotal = order.items.reduce((sum, i) => sum + (i.price * i.quantity), 0);
+    order.tax = order.subtotal * (order.taxRate / 100);
+    order.serviceCharge = order.subtotal * (order.serviceChargeRate / 100);
+    order.total = order.subtotal + order.tax + order.serviceCharge;
+    order.updatedAt = new Date();
+    order.hasModifications = true;
     
     await order.save();
-    console.log(`✅ Order created: ${order.orderNumber} for table ${order.tableNumber || 'takeaway'}`);
     
     const io = req.app.get('io');
     if (io) {
-      io.emit('new-order-received', order);
+      // Emit both events to ensure kitchen display updates
       io.emit('order-updated', order);
-      if (order.tableNumber) {
-        io.emit(`table-${order.tableNumber}-updated`, order);
-      }
+      io.emit('order-item-added', { orderId: order._id, item: newItem });
+      io.emit('order-modified', { orderId: order._id, orderNumber: order.orderNumber });
     }
     
-    res.status(201).json(order);
+    res.json(order);
   } catch (error) {
-    console.error('Error creating order:', error);
+    console.error('Error adding item:', error);
     res.status(500).json({ error: error.message });
   }
 });
