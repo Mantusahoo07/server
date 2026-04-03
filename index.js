@@ -110,7 +110,7 @@ const limiter = rateLimit({
 });
 
 // Apply rate limiting to API routes
-app.use('/api/', limiter);
+// app.use('/api/', limiter);
 
 // Stricter rate limit for auth endpoints
 const authLimiter = rateLimit({
