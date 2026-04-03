@@ -8,16 +8,16 @@ services:
       - key: NODE_ENV
         value: production
       - key: MONGODB_URI
-        value: mongodb+srv://pos:posd98@pos.8iiiieg.mongodb.net/pos-system?retryWrites=true&w=majority
+        sync: false
       - key: JWT_SECRET
         generateValue: true
       - key: RAZORPAY_KEY_ID
-        value: rzp_live_RlSrpAntWBQZ7c
+        sync: false
       - key: RAZORPAY_KEY_SECRET
         sync: false
       - key: CLIENT_URL
-        value: https://your-frontend-url.com
+        sync: false
     buildCommand: npm install
-    startCommand: node index.js   # ← Change this from server.js to index.js
+    startCommand: node index.js
     healthCheckPath: /health
     autoDeploy: true
