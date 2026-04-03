@@ -21,162 +21,16 @@ router.get('/table/:tableNumber/active', authenticate, async (req, res) => {
   try {
     const tableNumber = parseInt(req.params.tableNumber);
     
-    // Find all active orders for this table (not completed/cancelled)
     const activeOrders = await Order.find({
       tableNumber: tableNumber,
       status: { $in: ['pending', 'accepted', 'preparing', 'hold'] },
-      payment: { $ne: { status: 'paid' } }
+      'payment.status': { $ne: 'paid' }
     }).sort({ createdAt: 1 });
     
     console.log(`Found ${activeOrders.length} active orders for table ${tableNumber}`);
     res.json(activeOrders);
   } catch (error) {
     console.error('Error fetching table orders:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Get table session (all orders for a table including completed)
-router.get('/table/:tableNumber/session', authenticate, async (req, res) => {
-  try {
-    const tableNumber = parseInt(req.params.tableNumber);
-    
-    // Find all orders for this table
-    const allOrders = await Order.find({
-      tableNumber: tableNumber
-    }).sort({ createdAt: 1 });
-    
-    // Group by session
-    const sessions = {};
-    allOrders.forEach(order => {
-      const sessionId = order.tableSessionId || order._id.toString();
-      if (!sessions[sessionId]) {
-        sessions[sessionId] = [];
-      }
-      sessions[sessionId].push(order);
-    });
-    
-    res.json({
-      tableNumber,
-      activeOrders: allOrders.filter(o => o.status !== 'completed' && o.status !== 'cancelled'),
-      sessions: Object.values(sessions),
-      allOrders
-    });
-  } catch (error) {
-    console.error('Error fetching table session:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Create new order (with table session support)
-router.post('/', authenticate, async (req, res) => {
-  try {
-    const orderData = { ...req.body };
-    
-    // Generate order number
-    const lastOrder = await Order.findOne().sort({ orderNumber: -1 });
-    const orderNumber = lastOrder ? lastOrder.orderNumber + 1 : 1001;
-    
-    // Handle table session for dine-in orders
-    if (orderData.orderType === 'dine-in' && orderData.tableNumber) {
-      // Check if there's an existing active order for this table
-      const existingActiveOrder = await Order.findOne({
-        tableNumber: orderData.tableNumber,
-        status: { $in: ['pending', 'accepted', 'preparing', 'hold'] },
-        payment: { $ne: { status: 'paid' } }
-      });
-      
-      if (existingActiveOrder) {
-        // This is an additional order for the same table
-        orderData.isAdditionalOrder = true;
-        orderData.parentOrderId = existingActiveOrder._id;
-        orderData.tableSessionId = existingActiveOrder.tableSessionId || existingActiveOrder._id.toString();
-        console.log(`Additional order for table ${orderData.tableNumber}, session: ${orderData.tableSessionId}`);
-      } else {
-        // First order for this table session
-        orderData.isAdditionalOrder = false;
-        orderData.parentOrderId = null;
-        // Generate a new session ID
-        orderData.tableSessionId = `table_${orderData.tableNumber}_${Date.now()}`;
-        console.log(`New table session started for table ${orderData.tableNumber}, session: ${orderData.tableSessionId}`);
-      }
-    }
-    
-    const order = new Order({
-      ...orderData,
-      orderNumber,
-      createdBy: req.userId,
-      timerStart: new Date()
-    });
-    
-    await order.save();
-    console.log(`✅ Order created: ${order.orderNumber} for table ${order.tableNumber || 'takeaway'}`);
-    
-    const io = req.app.get('io');
-    if (io) {
-      io.emit('new-order-received', order);
-      io.emit('order-updated', order);
-      // Emit table-specific update
-      if (order.tableNumber) {
-        io.emit(`table-${order.tableNumber}-updated`, order);
-      }
-    }
-    
-    res.status(201).json(order);
-  } catch (error) {
-    console.error('Error creating order:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Complete billing for table (close table session)
-router.post('/table/:tableNumber/complete-billing', authenticate, async (req, res) => {
-  try {
-    const tableNumber = parseInt(req.params.tableNumber);
-    const { sessionId } = req.body;
-    
-    // Find all active orders for this table session
-    const query = {
-      tableNumber: tableNumber,
-      status: { $in: ['pending', 'accepted', 'preparing', 'hold', 'ready_for_billing'] }
-    };
-    
-    if (sessionId) {
-      query.tableSessionId = sessionId;
-    }
-    
-    const activeOrders = await Order.find(query);
-    
-    if (activeOrders.length === 0) {
-      return res.status(404).json({ error: 'No active orders found for this table' });
-    }
-    
-    // Update all orders to completed
-    const completedOrders = [];
-    for (const order of activeOrders) {
-      order.status = 'completed';
-      order.completedAt = new Date();
-      order.completedBy = req.userId;
-      order.payment.status = 'paid';
-      await order.save();
-      completedOrders.push(order);
-    }
-    
-    console.log(`✅ Billing completed for table ${tableNumber}, ${completedOrders.length} orders closed`);
-    
-    const io = req.app.get('io');
-    if (io) {
-      io.emit('table-billing-completed', { tableNumber, orders: completedOrders });
-      io.emit(`table-${tableNumber}-billed`, { tableNumber, orders: completedOrders });
-    }
-    
-    res.json({ 
-      message: `Billing completed for table ${tableNumber}`,
-      orders: completedOrders,
-      count: completedOrders.length
-    });
-  } catch (error) {
-    console.error('Error completing table billing:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -189,6 +43,62 @@ router.get('/:id', authenticate, async (req, res) => {
     res.json(order);
   } catch (error) {
     console.error('Error fetching order:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Create new order
+router.post('/', authenticate, async (req, res) => {
+  try {
+    const orderData = { ...req.body };
+    
+    const lastOrder = await Order.findOne().sort({ orderNumber: -1 });
+    const orderNumber = lastOrder ? lastOrder.orderNumber + 1 : 1001;
+    
+    // Handle table session for dine-in orders
+    if (orderData.orderType === 'dine-in' && orderData.tableNumber) {
+      const existingActiveOrder = await Order.findOne({
+        tableNumber: orderData.tableNumber,
+        status: { $in: ['pending', 'accepted', 'preparing', 'hold'] },
+        'payment.status': { $ne: 'paid' }
+      });
+      
+      if (existingActiveOrder) {
+        orderData.isAdditionalOrder = true;
+        orderData.parentOrderId = existingActiveOrder._id;
+        orderData.tableSessionId = existingActiveOrder.tableSessionId || existingActiveOrder._id.toString();
+        console.log(`Additional order for table ${orderData.tableNumber}, session: ${orderData.tableSessionId}`);
+      } else {
+        orderData.isAdditionalOrder = false;
+        orderData.parentOrderId = null;
+        orderData.tableSessionId = `table_${orderData.tableNumber}_${Date.now()}`;
+        console.log(`New table session started for table ${orderData.tableNumber}, session: ${orderData.tableSessionId}`);
+      }
+    }
+    
+    const order = new Order({
+      ...orderData,
+      orderNumber,
+      createdBy: req.userId,
+      timerStart: new Date(),
+      hasModifications: false
+    });
+    
+    await order.save();
+    console.log(`✅ Order created: ${order.orderNumber} for table ${order.tableNumber || 'takeaway'}`);
+    
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('new-order-received', order);
+      io.emit('order-updated', order);
+      if (order.tableNumber) {
+        io.emit(`table-${order.tableNumber}-updated`, order);
+      }
+    }
+    
+    res.status(201).json(order);
+  } catch (error) {
+    console.error('Error creating order:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -215,11 +125,16 @@ router.post('/:id/items', authenticate, async (req, res) => {
       specialInstructions: item.specialInstructions || '',
       status: 'pending',
       isModified: true,
-      modifiedAt: new Date()
+      isRemoved: false,
+      modifiedAt: new Date(),
+      categoryId: item.categoryId,
+      categoryName: item.categoryName,
+      categorySortOrder: item.categorySortOrder || 999
     };
     
     const existingItem = order.items.find(i => i.id === newItem.id);
     if (existingItem) {
+      existingItem.oldQuantity = existingItem.quantity;
       existingItem.quantity += newItem.quantity;
       existingItem.isModified = true;
       existingItem.modifiedAt = new Date();
@@ -241,6 +156,8 @@ router.post('/:id/items', authenticate, async (req, res) => {
     if (io) {
       io.emit('order-updated', order);
       io.emit('order-item-added', { orderId: order._id, item: newItem });
+      // Also emit a specific modification event for kitchen
+      io.emit('order-modified', { orderId: order._id, orderNumber: order.orderNumber });
     }
     
     res.json(order);
@@ -263,6 +180,14 @@ router.delete('/:id/items/:itemId', authenticate, async (req, res) => {
       return res.status(404).json({ error: 'Item not found' });
     }
     
+    // Mark as removed instead of deleting for kitchen visibility
+    const removedItem = order.items[itemIndex];
+    removedItem.isRemoved = true;
+    removedItem.isModified = true;
+    removedItem.removedAt = new Date();
+    removedItem.quantity = 0;
+    
+    // Actually remove from array (or keep with isRemoved flag)
     order.items.splice(itemIndex, 1);
     
     // Update totals
@@ -279,6 +204,7 @@ router.delete('/:id/items/:itemId', authenticate, async (req, res) => {
     if (io) {
       io.emit('order-updated', order);
       io.emit('order-item-removed', { orderId: order._id, itemId: req.params.itemId });
+      io.emit('order-modified', { orderId: order._id, orderNumber: order.orderNumber });
     }
     
     res.json(order);
@@ -304,10 +230,10 @@ router.patch('/:id/items/:itemId', authenticate, async (req, res) => {
     }
     
     const oldQuantity = item.quantity;
+    item.oldQuantity = oldQuantity;
     item.quantity = quantity;
     item.isModified = true;
     item.modifiedAt = new Date();
-    item.oldQuantity = oldQuantity;
     
     // Update totals
     order.subtotal = order.items.reduce((sum, i) => sum + (i.price * i.quantity), 0);
@@ -322,6 +248,7 @@ router.patch('/:id/items/:itemId', authenticate, async (req, res) => {
     const io = req.app.get('io');
     if (io) {
       io.emit('order-updated', order);
+      io.emit('order-modified', { orderId: order._id, orderNumber: order.orderNumber });
     }
     
     res.json(order);
@@ -449,7 +376,57 @@ router.patch('/:id/complete-payment', authenticate, async (req, res) => {
   }
 });
 
-// Process credit sale
+// Complete billing for table
+router.post('/table/:tableNumber/complete-billing', authenticate, async (req, res) => {
+  try {
+    const tableNumber = parseInt(req.params.tableNumber);
+    const { sessionId } = req.body;
+    
+    const query = {
+      tableNumber: tableNumber,
+      status: { $in: ['pending', 'accepted', 'preparing', 'hold', 'ready_for_billing'] }
+    };
+    
+    if (sessionId) {
+      query.tableSessionId = sessionId;
+    }
+    
+    const activeOrders = await Order.find(query);
+    
+    if (activeOrders.length === 0) {
+      return res.status(404).json({ error: 'No active orders found for this table' });
+    }
+    
+    const completedOrders = [];
+    for (const order of activeOrders) {
+      order.status = 'completed';
+      order.completedAt = new Date();
+      order.completedBy = req.userId;
+      order.payment.status = 'paid';
+      await order.save();
+      completedOrders.push(order);
+    }
+    
+    console.log(`✅ Billing completed for table ${tableNumber}, ${completedOrders.length} orders closed`);
+    
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('table-billing-completed', { tableNumber, orders: completedOrders });
+      io.emit(`table-${tableNumber}-billed`, { tableNumber, orders: completedOrders });
+    }
+    
+    res.json({ 
+      message: `Billing completed for table ${tableNumber}`,
+      orders: completedOrders,
+      count: completedOrders.length
+    });
+  } catch (error) {
+    console.error('Error completing table billing:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Credit sale
 router.post('/:id/credit-sale', authenticate, async (req, res) => {
   try {
     const { customerId, customerName, customerPhone, customerEmail, dueDate } = req.body;
