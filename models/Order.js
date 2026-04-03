@@ -45,6 +45,9 @@ const orderSchema = new mongoose.Schema({
     default: null
   },
   tableNumber: { type: Number, min: 1, max: 20, default: null },
+  tableSessionId: { type: String, default: null }, // New: Track table session
+  isAdditionalOrder: { type: Boolean, default: false }, // New: Mark if this is an additional order
+  parentOrderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Order', default: null }, // New: Link to first order
   customer: {
     name: { type: String, default: 'Walk-In' },
     phone: String,
@@ -54,8 +57,6 @@ const orderSchema = new mongoose.Schema({
     outstandingAmount: { type: Number, default: 0 }
   },
   hasModifications: { type: Boolean, default: false },
-  isAdditionalOrder: { type: Boolean, default: false },
-  parentOrderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Order', default: null },
   payment: {
     method: {
       type: String,
@@ -84,6 +85,9 @@ const orderSchema = new mongoose.Schema({
   acceptedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   completedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null }
 });
+
+// Index for faster table session queries
+orderSchema.index({ tableNumber: 1, tableSessionId: 1, status: 1 });
 
 // Pre-save middleware
 orderSchema.pre('save', function(next) {
