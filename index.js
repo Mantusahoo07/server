@@ -4,7 +4,6 @@ import { Server } from 'socket.io';
 import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
-// import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
 import mongoose from 'mongoose';
 import connectDB from './config/database.js';
@@ -48,7 +47,7 @@ const allowedOrigins = [
   process.env.CLIENT_URL
 ].filter(Boolean);
 
-// Socket.io with enhanced configuration for persistent connection
+// Socket.io configuration
 const io = new Server(httpServer, {
   cors: {
     origin: allowedOrigins,
@@ -65,7 +64,7 @@ const io = new Server(httpServer, {
 // Make io accessible throughout the app
 app.set('io', io);
 
-// Connect to MongoDB with retry logic
+// Connect to MongoDB
 const connectWithRetry = async (retries = 5, delay = 5000) => {
   for (let i = 0; i < retries; i++) {
     try {
@@ -88,7 +87,7 @@ const connectWithRetry = async (retries = 5, delay = 5000) => {
 
 connectWithRetry();
 
-// Security Middleware
+// Security Middleware (without rate limiting)
 app.use(helmet({
   contentSecurityPolicy: false,
   crossOriginResourcePolicy: { policy: "cross-origin" }
@@ -100,27 +99,6 @@ app.use(compression());
 // Logging
 app.use(morgan('combined'));
 
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per windowMs
-  message: { error: 'Too many requests, please try again later.' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-// Apply rate limiting to API routes
-// app.use('/api/', limiter);
-
-// Stricter rate limit for auth endpoints
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 20,
-  skipSuccessfulRequests: true,
-});
-
-app.use('/api/auth/', authLimiter);
-
 // CORS middleware
 app.use(cors({
   origin: function(origin, callback) {
@@ -129,7 +107,7 @@ app.use(cors({
       callback(null, true);
     } else {
       console.log('CORS blocked origin:', origin);
-      callback(null, true); // Allow in development
+      callback(null, true);
     }
   },
   credentials: true,
@@ -237,25 +215,22 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Socket.io setup with enhanced handlers
+// Socket.io setup
 setupSocketHandlers(io);
 
 // Graceful shutdown
 const gracefulShutdown = async () => {
   console.log('Received shutdown signal, closing gracefully...');
   
-  // Close socket connections
   if (io) {
     io.close(() => {
       console.log('Socket.IO server closed');
     });
   }
   
-  // Close HTTP server
   httpServer.close(async () => {
     console.log('HTTP server closed');
     
-    // Close MongoDB connection
     try {
       await mongoose.connection.close();
       console.log('MongoDB connection closed');
@@ -266,7 +241,6 @@ const gracefulShutdown = async () => {
     process.exit(0);
   });
   
-  // Force close after 10 seconds
   setTimeout(() => {
     console.error('Could not close connections in time, forcing shutdown');
     process.exit(1);
@@ -290,7 +264,7 @@ process.on('uncaughtException', (error) => {
 const PORT = process.env.PORT || 3001;
 httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`🌍 Environment: process.env.NODE_ENV || 'development'`);
   console.log(`🔌 Socket.io ready for connections`);
   console.log(`📡 API URL: http://localhost:${PORT}/api`);
   console.log(`✅ CORS enabled for:`, allowedOrigins);
