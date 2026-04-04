@@ -22,7 +22,9 @@ router.get('/', async (req, res) => {
         ...table.toObject(),
         runningOrderCount: activeOrders.length,
         runningOrders: activeOrders.map(o => ({ orderNumber: o.orderNumber, total: o.total, status: o.status })),
-        totalRunningAmount: activeOrders.reduce((sum, o) => sum + (o.total || 0), 0)
+        totalRunningAmount: activeOrders.reduce((sum, o) => sum + (o.total || 0), 0),
+        // Table is selectable regardless of status
+        selectable: true
       };
     }));
     
@@ -51,7 +53,8 @@ router.get('/:tableNumber', async (req, res) => {
       ...table.toObject(),
       runningOrders: activeOrders,
       runningOrderCount: activeOrders.length,
-      totalRunningAmount: activeOrders.reduce((sum, o) => sum + (o.total || 0), 0)
+      totalRunningAmount: activeOrders.reduce((sum, o) => sum + (o.total || 0), 0),
+      selectable: true
     });
   } catch (error) {
     console.error('Error fetching table:', error);
@@ -62,7 +65,7 @@ router.get('/:tableNumber', async (req, res) => {
 // Add new table
 router.post('/', authenticate, authorize('admin', 'manager'), async (req, res) => {
   try {
-    const { tableNumber, capacity, section, status } = req.body;
+    const { tableNumber, capacity, section } = req.body;
     
     if (!tableNumber) {
       return res.status(400).json({ error: 'Table number is required' });
@@ -81,7 +84,7 @@ router.post('/', authenticate, authorize('admin', 'manager'), async (req, res) =
       tableNumber: parseInt(tableNumber),
       capacity: capacity ? parseInt(capacity) : 4,
       section: section || 'Main Hall',
-      status: status || 'available'
+      status: 'available'
     });
     
     await table.save();
@@ -93,13 +96,13 @@ router.post('/', authenticate, authorize('admin', 'manager'), async (req, res) =
   }
 });
 
-// Update table
+// Update table (admin/manager only)
 router.patch('/:tableNumber', authenticate, authorize('admin', 'manager'), async (req, res) => {
   try {
-    const { capacity, section, status, currentOrderId } = req.body;
+    const { capacity, section, status } = req.body;
     
-    if (status && !['available', 'occupied', 'reserved'].includes(status)) {
-      return res.status(400).json({ error: 'Invalid status. Must be available, occupied, or reserved' });
+    if (status && !['available', 'running'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid status. Must be available or running' });
     }
     
     if (capacity !== undefined) {
@@ -113,7 +116,6 @@ router.patch('/:tableNumber', authenticate, authorize('admin', 'manager'), async
     if (capacity !== undefined) updateData.capacity = parseInt(capacity);
     if (section !== undefined) updateData.section = section;
     if (status !== undefined) updateData.status = status;
-    if (currentOrderId !== undefined) updateData.currentOrderId = currentOrderId;
     updateData.updatedAt = new Date();
     
     const table = await Table.findOneAndUpdate(
@@ -147,8 +149,14 @@ router.delete('/:tableNumber', authenticate, authorize('admin'), async (req, res
       return res.status(404).json({ error: 'Table not found' });
     }
     
-    if (table.status === 'occupied') {
-      return res.status(400).json({ error: 'Cannot delete occupied table. Please clear the table first.' });
+    const activeOrders = await Order.countDocuments({
+      tableNumber: parseInt(req.params.tableNumber),
+      status: { $in: ['pending', 'accepted', 'preparing', 'hold'] },
+      'payment.status': { $ne': 'paid' }
+    });
+    
+    if (activeOrders > 0) {
+      return res.status(400).json({ error: 'Cannot delete table with running orders. Please complete or cancel all orders first.' });
     }
     
     await Table.findOneAndDelete({ tableNumber: parseInt(req.params.tableNumber) });
@@ -159,29 +167,26 @@ router.delete('/:tableNumber', authenticate, authorize('admin'), async (req, res
   }
 });
 
-// Update table status
-router.patch('/:tableNumber/status', async (req, res) => {
+// Update table status based on order count
+router.patch('/:tableNumber/update-status', async (req, res) => {
   try {
-    const { status, orderId } = req.body;
+    const tableNumber = parseInt(req.params.tableNumber);
     
-    if (!status || !['available', 'occupied', 'reserved'].includes(status)) {
-      return res.status(400).json({ error: 'Valid status is required (available, occupied, reserved)' });
-    }
+    // Count active orders for this table
+    const activeOrdersCount = await Order.countDocuments({
+      tableNumber: tableNumber,
+      status: { $in: ['pending', 'accepted', 'preparing', 'hold'] },
+      'payment.status': { $ne: 'paid' }
+    });
     
-    const updateData = {
-      status,
-      updatedAt: new Date()
-    };
-    
-    if (orderId) {
-      updateData.currentOrderId = orderId;
-    } else if (status === 'available') {
-      updateData.currentOrderId = null;
-    }
+    const newStatus = activeOrdersCount > 0 ? 'running' : 'available';
     
     const table = await Table.findOneAndUpdate(
-      { tableNumber: parseInt(req.params.tableNumber) },
-      updateData,
+      { tableNumber: tableNumber },
+      { 
+        status: newStatus,
+        updatedAt: new Date()
+      },
       { new: true }
     );
     
@@ -191,10 +196,10 @@ router.patch('/:tableNumber/status', async (req, res) => {
     
     const io = req.app.get('io');
     if (io) {
-      io.emit('table-status-changed', { tableNumber: table.tableNumber, status: table.status });
+      io.emit('table-status-changed', { tableNumber, status: newStatus, runningOrderCount: activeOrdersCount });
     }
     
-    res.json(table);
+    res.json({ table, runningOrderCount: activeOrdersCount });
   } catch (error) {
     console.error('Error updating table status:', error);
     res.status(500).json({ error: error.message });
