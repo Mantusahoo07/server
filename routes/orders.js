@@ -26,14 +26,17 @@ const getBaseOrderNumberForTable = async (tableNumber) => {
   return lastOrder ? lastOrder.baseOrderNumber + 1 : 1000000;
 };
 
-// Helper function to get next running number for a table
+// Helper function to get next running number for a table (returns 1 for second order, 2 for third, etc.)
 const getNextRunningNumber = async (tableNumber, baseOrderNumber) => {
-  const lastOrderForTable = await Order.findOne({
+  const ordersForTable = await Order.find({
     tableNumber: tableNumber,
     baseOrderNumber: baseOrderNumber
-  }).sort({ runningNumber: -1 });
+  }).sort({ runningNumber: 1 });
   
-  return lastOrderForTable ? lastOrderForTable.runningNumber + 1 : 1;
+  // First order has runningNumber = 0
+  // Second order should have runningNumber = 1
+  // Third order should have runningNumber = 2, etc.
+  return ordersForTable.length;
 };
 
 // Helper function to update table status based on active orders
@@ -128,6 +131,7 @@ router.post('/', authenticate, async (req, res) => {
         
         // Get the base order number from the first order of this table
         baseOrderNumber = await getBaseOrderNumberForTable(orderData.tableNumber);
+        // Get next running number (1 for second order, 2 for third, etc.)
         runningNumber = await getNextRunningNumber(orderData.tableNumber, baseOrderNumber);
       } else {
         // First order for this table - create new session
@@ -137,20 +141,20 @@ router.post('/', authenticate, async (req, res) => {
         // Generate new base order number
         const lastOrder = await Order.findOne().sort({ baseOrderNumber: -1 });
         baseOrderNumber = lastOrder ? lastOrder.baseOrderNumber + 1 : 1000000;
-        runningNumber = 1;
+        runningNumber = 0; // First order has no suffix
       }
     } else {
       // Non dine-in orders
       const lastOrder = await Order.findOne().sort({ baseOrderNumber: -1 });
       baseOrderNumber = lastOrder ? lastOrder.baseOrderNumber + 1 : 1000000;
-      runningNumber = 1;
+      runningNumber = 0;
     }
     
     const order = new Order({
       ...orderData,
       baseOrderNumber,
       runningNumber,
-      displayOrderNumber: `${baseOrderNumber}-${runningNumber}`,
+      displayOrderNumber: runningNumber === 0 ? `${baseOrderNumber}` : `${baseOrderNumber}-${runningNumber}`,
       tableSessionId,
       isAdditionalOrder,
       createdBy: req.userId,
@@ -177,7 +181,7 @@ router.post('/', authenticate, async (req, res) => {
           tableNumber: orderData.tableNumber,
           baseOrderNumber,
           runningNumber,
-          displayOrderNumber: `${baseOrderNumber}-${runningNumber}`,
+          displayOrderNumber: order.displayOrderNumber,
           totalRunningOrders: activeOrdersCount
         });
       }
@@ -188,7 +192,7 @@ router.post('/', authenticate, async (req, res) => {
       }
     }
     
-    console.log(`✅ Order created: ${baseOrderNumber}-${runningNumber} for Table ${orderData.tableNumber || 'N/A'}`);
+    console.log(`✅ Order created: ${order.displayOrderNumber} for Table ${orderData.tableNumber || 'N/A'}`);
     res.status(201).json(order);
   } catch (error) {
     console.error('Error creating order:', error);
