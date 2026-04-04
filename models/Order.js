@@ -19,9 +19,10 @@ const orderItemSchema = new mongoose.Schema({
 });
 
 const orderSchema = new mongoose.Schema({
-  orderNumber: Number,
-  displayOrderNumber: { type: String, default: '' }, // New: e.g., "1001-1", "1001-2"
-  runningOrderNumber: { type: Number, default: 1 }, // New: 1, 2, 3 for table orders
+  baseOrderNumber: { type: Number, required: true }, // Original order number (e.g., 1000000)
+  runningNumber: { type: Number, default: 1 }, // Suffix -1, -2, -3
+  displayOrderNumber: { type: String, default: '' }, // Formatted as "1000000-1"
+  orderNumber: { type: Number }, // For backward compatibility
   items: [orderItemSchema],
   subtotal: Number,
   tax: Number,
@@ -88,11 +89,10 @@ const orderSchema = new mongoose.Schema({
   completedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null }
 });
 
-// Indexes for faster queries
+// Indexes
 orderSchema.index({ tableNumber: 1, status: 1 });
 orderSchema.index({ tableSessionId: 1 });
-orderSchema.index({ status: 1, 'payment.status': 1 });
-orderSchema.index({ createdAt: -1 });
+orderSchema.index({ baseOrderNumber: 1 });
 orderSchema.index({ displayOrderNumber: 1 });
 
 // Pre-save middleware
@@ -110,6 +110,14 @@ orderSchema.pre('save', function(next) {
       timestamp: new Date()
     };
   }
+  
+  // Set displayOrderNumber
+  if (!this.displayOrderNumber) {
+    this.displayOrderNumber = `${this.baseOrderNumber}-${this.runningNumber}`;
+  }
+  
+  // For backward compatibility
+  this.orderNumber = this.baseOrderNumber;
   
   this.updatedAt = new Date();
   next();
