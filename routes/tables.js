@@ -5,32 +5,35 @@ import { authenticate, authorize } from '../middleware/auth.js';
 
 const router = express.Router();
 
-// Get all tables (public - for POS display)
+// Get all tables with running order counts
 router.get('/', async (req, res) => {
   try {
     const tables = await Table.find({}).sort({ tableNumber: 1 });
     
     // Enrich with active order count for each table
-    const tablesWithOrderCount = await Promise.all(tables.map(async (table) => {
-      const activeOrders = await Order.countDocuments({
+    const tablesWithDetails = await Promise.all(tables.map(async (table) => {
+      const activeOrders = await Order.find({
         tableNumber: table.tableNumber,
         status: { $in: ['pending', 'accepted', 'preparing', 'hold'] },
         'payment.status': { $ne: 'paid' }
-      });
+      }).sort({ createdAt: 1 });
+      
       return {
         ...table.toObject(),
-        activeOrderCount: activeOrders
+        runningOrderCount: activeOrders.length,
+        runningOrders: activeOrders.map(o => ({ orderNumber: o.orderNumber, total: o.total, status: o.status })),
+        totalRunningAmount: activeOrders.reduce((sum, o) => sum + (o.total || 0), 0)
       };
     }));
     
-    res.json(tablesWithOrderCount);
+    res.json(tablesWithDetails);
   } catch (error) {
     console.error('Error fetching tables:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// Get table by number with active orders
+// Get table by number with running orders
 router.get('/:tableNumber', async (req, res) => {
   try {
     const table = await Table.findOne({ tableNumber: req.params.tableNumber });
@@ -46,8 +49,9 @@ router.get('/:tableNumber', async (req, res) => {
     
     res.json({
       ...table.toObject(),
-      activeOrders,
-      activeOrderCount: activeOrders.length
+      runningOrders: activeOrders,
+      runningOrderCount: activeOrders.length,
+      totalRunningAmount: activeOrders.reduce((sum, o) => sum + (o.total || 0), 0)
     });
   } catch (error) {
     console.error('Error fetching table:', error);
@@ -55,7 +59,7 @@ router.get('/:tableNumber', async (req, res) => {
   }
 });
 
-// Add new table (admin/manager only)
+// Add new table
 router.post('/', authenticate, authorize('admin', 'manager'), async (req, res) => {
   try {
     const { tableNumber, capacity, section, status } = req.body;
@@ -89,7 +93,7 @@ router.post('/', authenticate, authorize('admin', 'manager'), async (req, res) =
   }
 });
 
-// Update table (admin/manager only)
+// Update table
 router.patch('/:tableNumber', authenticate, authorize('admin', 'manager'), async (req, res) => {
   try {
     const { capacity, section, status, currentOrderId } = req.body;
@@ -127,7 +131,6 @@ router.patch('/:tableNumber', authenticate, authorize('admin', 'manager'), async
       io.emit('table-status-changed', { tableNumber: table.tableNumber, status: table.status });
     }
     
-    console.log(`Table ${table.tableNumber} updated successfully`);
     res.json(table);
   } catch (error) {
     console.error('Error updating table:', error);
@@ -135,7 +138,7 @@ router.patch('/:tableNumber', authenticate, authorize('admin', 'manager'), async
   }
 });
 
-// Delete table (admin only)
+// Delete table
 router.delete('/:tableNumber', authenticate, authorize('admin'), async (req, res) => {
   try {
     const table = await Table.findOne({ tableNumber: parseInt(req.params.tableNumber) });
@@ -149,7 +152,6 @@ router.delete('/:tableNumber', authenticate, authorize('admin'), async (req, res
     }
     
     await Table.findOneAndDelete({ tableNumber: parseInt(req.params.tableNumber) });
-    console.log(`Table ${req.params.tableNumber} deleted successfully`);
     res.json({ message: 'Table deleted successfully' });
   } catch (error) {
     console.error('Error deleting table:', error);
@@ -157,7 +159,7 @@ router.delete('/:tableNumber', authenticate, authorize('admin'), async (req, res
   }
 });
 
-// Update table status (for POS)
+// Update table status
 router.patch('/:tableNumber/status', async (req, res) => {
   try {
     const { status, orderId } = req.body;
@@ -199,7 +201,7 @@ router.patch('/:tableNumber/status', async (req, res) => {
   }
 });
 
-// Initialize default tables (admin only)
+// Initialize default tables
 router.post('/initialize', authenticate, authorize('admin'), async (req, res) => {
   try {
     const existingTables = await Table.countDocuments();
@@ -220,7 +222,6 @@ router.post('/initialize', authenticate, authorize('admin'), async (req, res) =>
     }
     
     await Table.insertMany(tables);
-    console.log('20 tables initialized successfully');
     res.json({ 
       message: '20 tables initialized successfully', 
       tables,
