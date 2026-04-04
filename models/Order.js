@@ -20,6 +20,8 @@ const orderItemSchema = new mongoose.Schema({
 
 const orderSchema = new mongoose.Schema({
   orderNumber: Number,
+  displayOrderNumber: { type: String, default: '' }, // New: e.g., "1001-1", "1001-2"
+  runningOrderNumber: { type: Number, default: 1 }, // New: 1, 2, 3 for table orders
   items: [orderItemSchema],
   subtotal: Number,
   tax: Number,
@@ -91,6 +93,7 @@ orderSchema.index({ tableNumber: 1, status: 1 });
 orderSchema.index({ tableSessionId: 1 });
 orderSchema.index({ status: 1, 'payment.status': 1 });
 orderSchema.index({ createdAt: -1 });
+orderSchema.index({ displayOrderNumber: 1 });
 
 // Pre-save middleware
 orderSchema.pre('save', function(next) {
