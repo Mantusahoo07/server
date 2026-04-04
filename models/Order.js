@@ -19,10 +19,10 @@ const orderItemSchema = new mongoose.Schema({
 });
 
 const orderSchema = new mongoose.Schema({
-  baseOrderNumber: { type: Number, required: true }, // Original order number (e.g., 1000000)
-  runningNumber: { type: Number, default: 0 }, // 0 for first order, 1, 2, 3 for additional orders
-  displayOrderNumber: { type: String, default: '' }, // "1000000" for first, "1000000-1" for second
-  orderNumber: { type: Number }, // For backward compatibility (same as baseOrderNumber)
+  baseOrderNumber: { type: Number, required: true },
+  runningNumber: { type: Number, default: 0 },
+  displayOrderNumber: { type: String, default: '' },
+  orderNumber: { type: Number },
   items: [orderItemSchema],
   subtotal: Number,
   tax: Number,
@@ -94,6 +94,8 @@ orderSchema.index({ tableNumber: 1, status: 1 });
 orderSchema.index({ tableSessionId: 1 });
 orderSchema.index({ baseOrderNumber: 1 });
 orderSchema.index({ displayOrderNumber: 1 });
+orderSchema.index({ status: 1 });
+orderSchema.index({ createdAt: -1 });
 
 // Pre-save middleware
 orderSchema.pre('save', function(next) {
