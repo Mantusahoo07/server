@@ -1,5 +1,6 @@
 import express from 'express';
 import Table from '../models/Table.js';
+import Order from '../models/Order.js';
 import { authenticate, authorize } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -8,21 +9,46 @@ const router = express.Router();
 router.get('/', async (req, res) => {
   try {
     const tables = await Table.find({}).sort({ tableNumber: 1 });
-    res.json(tables);
+    
+    // Enrich with active order count for each table
+    const tablesWithOrderCount = await Promise.all(tables.map(async (table) => {
+      const activeOrders = await Order.countDocuments({
+        tableNumber: table.tableNumber,
+        status: { $in: ['pending', 'accepted', 'preparing', 'hold'] },
+        'payment.status': { $ne: 'paid' }
+      });
+      return {
+        ...table.toObject(),
+        activeOrderCount: activeOrders
+      };
+    }));
+    
+    res.json(tablesWithOrderCount);
   } catch (error) {
     console.error('Error fetching tables:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// Get table by number
+// Get table by number with active orders
 router.get('/:tableNumber', async (req, res) => {
   try {
     const table = await Table.findOne({ tableNumber: req.params.tableNumber });
     if (!table) {
       return res.status(404).json({ error: 'Table not found' });
     }
-    res.json(table);
+    
+    const activeOrders = await Order.find({
+      tableNumber: parseInt(req.params.tableNumber),
+      status: { $in: ['pending', 'accepted', 'preparing', 'hold'] },
+      'payment.status': { $ne: 'paid' }
+    }).sort({ createdAt: 1 });
+    
+    res.json({
+      ...table.toObject(),
+      activeOrders,
+      activeOrderCount: activeOrders.length
+    });
   } catch (error) {
     console.error('Error fetching table:', error);
     res.status(500).json({ error: error.message });
@@ -34,7 +60,6 @@ router.post('/', authenticate, authorize('admin', 'manager'), async (req, res) =
   try {
     const { tableNumber, capacity, section, status } = req.body;
     
-    // Validate table number
     if (!tableNumber) {
       return res.status(400).json({ error: 'Table number is required' });
     }
@@ -43,7 +68,6 @@ router.post('/', authenticate, authorize('admin', 'manager'), async (req, res) =
       return res.status(400).json({ error: 'Table number must be between 1 and 100' });
     }
     
-    // Check if table already exists
     const existingTable = await Table.findOne({ tableNumber });
     if (existingTable) {
       return res.status(400).json({ error: 'Table number already exists' });
@@ -70,12 +94,10 @@ router.patch('/:tableNumber', authenticate, authorize('admin', 'manager'), async
   try {
     const { capacity, section, status, currentOrderId } = req.body;
     
-    // Validate status if provided
     if (status && !['available', 'occupied', 'reserved'].includes(status)) {
       return res.status(400).json({ error: 'Invalid status. Must be available, occupied, or reserved' });
     }
     
-    // Validate capacity if provided
     if (capacity !== undefined) {
       const capacityNum = parseInt(capacity);
       if (isNaN(capacityNum) || capacityNum < 1 || capacityNum > 20) {
@@ -100,6 +122,11 @@ router.patch('/:tableNumber', authenticate, authorize('admin', 'manager'), async
       return res.status(404).json({ error: 'Table not found' });
     }
     
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('table-status-changed', { tableNumber: table.tableNumber, status: table.status });
+    }
+    
     console.log(`Table ${table.tableNumber} updated successfully`);
     res.json(table);
   } catch (error) {
@@ -117,7 +144,6 @@ router.delete('/:tableNumber', authenticate, authorize('admin'), async (req, res
       return res.status(404).json({ error: 'Table not found' });
     }
     
-    // Check if table is occupied
     if (table.status === 'occupied') {
       return res.status(400).json({ error: 'Cannot delete occupied table. Please clear the table first.' });
     }
@@ -131,93 +157,7 @@ router.delete('/:tableNumber', authenticate, authorize('admin'), async (req, res
   }
 });
 
-// Initialize default tables (admin only)
-router.post('/initialize', authenticate, authorize('admin'), async (req, res) => {
-  try {
-    // Check if tables already exist
-    const existingTables = await Table.countDocuments();
-    if (existingTables > 0) {
-      return res.status(400).json({ 
-        error: 'Tables already exist. Use delete endpoints to remove existing tables first.' 
-      });
-    }
-    
-    const tables = [];
-    for (let i = 1; i <= 20; i++) {
-      tables.push({
-        tableNumber: i,
-        status: 'available',
-        capacity: i <= 10 ? 4 : 6,
-        section: i <= 10 ? 'Main Hall' : 'Back Hall'
-      });
-    }
-    
-    await Table.insertMany(tables);
-    console.log('20 tables initialized successfully');
-    res.json({ 
-      message: '20 tables initialized successfully', 
-      tables,
-      count: tables.length 
-    });
-  } catch (error) {
-    console.error('Error initializing tables:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Bulk create tables (admin only)
-router.post('/bulk', authenticate, authorize('admin'), async (req, res) => {
-  try {
-    const { tables: newTables } = req.body;
-    
-    if (!newTables || !Array.isArray(newTables) || newTables.length === 0) {
-      return res.status(400).json({ error: 'Please provide an array of tables' });
-    }
-    
-    const createdTables = [];
-    const errors = [];
-    
-    for (const tableData of newTables) {
-      try {
-        const { tableNumber, capacity, section, status } = tableData;
-        
-        if (!tableNumber) {
-          errors.push({ tableData, error: 'Table number is required' });
-          continue;
-        }
-        
-        const existingTable = await Table.findOne({ tableNumber });
-        if (existingTable) {
-          errors.push({ tableNumber, error: 'Table number already exists' });
-          continue;
-        }
-        
-        const table = new Table({
-          tableNumber: parseInt(tableNumber),
-          capacity: capacity ? parseInt(capacity) : 4,
-          section: section || 'Main Hall',
-          status: status || 'available'
-        });
-        
-        await table.save();
-        createdTables.push(table);
-      } catch (err) {
-        errors.push({ tableData, error: err.message });
-      }
-    }
-    
-    res.json({
-      message: `Created ${createdTables.length} tables, ${errors.length} failed`,
-      createdTables,
-      errors
-    });
-  } catch (error) {
-    console.error('Error bulk creating tables:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Update table status (for POS - public, but with validation)
+// Update table status (for POS)
 router.patch('/:tableNumber/status', async (req, res) => {
   try {
     const { status, orderId } = req.body;
@@ -247,9 +187,47 @@ router.patch('/:tableNumber/status', async (req, res) => {
       return res.status(404).json({ error: 'Table not found' });
     }
     
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('table-status-changed', { tableNumber: table.tableNumber, status: table.status });
+    }
+    
     res.json(table);
   } catch (error) {
     console.error('Error updating table status:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Initialize default tables (admin only)
+router.post('/initialize', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    const existingTables = await Table.countDocuments();
+    if (existingTables > 0) {
+      return res.status(400).json({ 
+        error: 'Tables already exist. Use delete endpoints to remove existing tables first.' 
+      });
+    }
+    
+    const tables = [];
+    for (let i = 1; i <= 20; i++) {
+      tables.push({
+        tableNumber: i,
+        status: 'available',
+        capacity: i <= 10 ? 4 : 6,
+        section: i <= 10 ? 'Main Hall' : 'Back Hall'
+      });
+    }
+    
+    await Table.insertMany(tables);
+    console.log('20 tables initialized successfully');
+    res.json({ 
+      message: '20 tables initialized successfully', 
+      tables,
+      count: tables.length 
+    });
+  } catch (error) {
+    console.error('Error initializing tables:', error);
     res.status(500).json({ error: error.message });
   }
 });
