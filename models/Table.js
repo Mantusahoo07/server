@@ -10,18 +10,17 @@ const tableSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['available', 'occupied', 'reserved'],
+    enum: ['available', 'running'],
     default: 'available'
   },
   capacity: {
     type: Number,
     default: 4
   },
-  currentOrderId: {
+  currentOrderIds: [{
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Order',
-    default: null
-  },
+    ref: 'Order'
+  }],
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 });
