@@ -20,9 +20,9 @@ const orderItemSchema = new mongoose.Schema({
 
 const orderSchema = new mongoose.Schema({
   baseOrderNumber: { type: Number, required: true }, // Original order number (e.g., 1000000)
-  runningNumber: { type: Number, default: 1 }, // Suffix -1, -2, -3
-  displayOrderNumber: { type: String, default: '' }, // Formatted as "1000000-1"
-  orderNumber: { type: Number }, // For backward compatibility
+  runningNumber: { type: Number, default: 0 }, // 0 for first order, 1, 2, 3 for additional orders
+  displayOrderNumber: { type: String, default: '' }, // "1000000" for first, "1000000-1" for second
+  orderNumber: { type: Number }, // For backward compatibility (same as baseOrderNumber)
   items: [orderItemSchema],
   subtotal: Number,
   tax: Number,
@@ -111,9 +111,13 @@ orderSchema.pre('save', function(next) {
     };
   }
   
-  // Set displayOrderNumber
+  // Set displayOrderNumber based on runningNumber
   if (!this.displayOrderNumber) {
-    this.displayOrderNumber = `${this.baseOrderNumber}-${this.runningNumber}`;
+    if (this.runningNumber === 0) {
+      this.displayOrderNumber = `${this.baseOrderNumber}`;
+    } else {
+      this.displayOrderNumber = `${this.baseOrderNumber}-${this.runningNumber}`;
+    }
   }
   
   // For backward compatibility
