@@ -23,7 +23,6 @@ router.get('/', async (req, res) => {
         runningOrderCount: activeOrders.length,
         runningOrders: activeOrders.map(o => ({ orderNumber: o.orderNumber, total: o.total, status: o.status })),
         totalRunningAmount: activeOrders.reduce((sum, o) => sum + (o.total || 0), 0),
-        // Table is selectable regardless of status
         selectable: true
       };
     }));
@@ -96,7 +95,7 @@ router.post('/', authenticate, authorize('admin', 'manager'), async (req, res) =
   }
 });
 
-// Update table (admin/manager only)
+// Update table
 router.patch('/:tableNumber', authenticate, authorize('admin', 'manager'), async (req, res) => {
   try {
     const { capacity, section, status } = req.body;
@@ -152,7 +151,7 @@ router.delete('/:tableNumber', authenticate, authorize('admin'), async (req, res
     const activeOrders = await Order.countDocuments({
       tableNumber: parseInt(req.params.tableNumber),
       status: { $in: ['pending', 'accepted', 'preparing', 'hold'] },
-      'payment.status': { $ne': 'paid' }
+      'payment.status': { $ne: 'paid' }
     });
     
     if (activeOrders > 0) {
@@ -172,7 +171,6 @@ router.patch('/:tableNumber/update-status', async (req, res) => {
   try {
     const tableNumber = parseInt(req.params.tableNumber);
     
-    // Count active orders for this table
     const activeOrdersCount = await Order.countDocuments({
       tableNumber: tableNumber,
       status: { $in: ['pending', 'accepted', 'preparing', 'hold'] },
