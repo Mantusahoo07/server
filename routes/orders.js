@@ -26,7 +26,7 @@ const getBaseOrderNumberForTable = async (tableNumber) => {
   return lastOrder ? lastOrder.baseOrderNumber + 1 : 1000000;
 };
 
-// Helper function to get next running number for a table (returns 1 for second order, 2 for third, etc.)
+// Helper function to get next running number for a table
 const getNextRunningNumber = async (tableNumber, baseOrderNumber) => {
   const ordersForTable = await Order.find({
     tableNumber: tableNumber,
@@ -75,6 +75,7 @@ const updateTableStatusFromOrders = async (tableNumber, io) => {
 router.get('/', authenticate, async (req, res) => {
   try {
     const orders = await Order.find({}).sort({ createdAt: -1 });
+    console.log(`📋 Fetched ${orders.length} orders`);
     res.json(orders);
   } catch (error) {
     console.error('Error fetching orders:', error);
@@ -93,6 +94,7 @@ router.get('/table/:tableNumber/active', authenticate, async (req, res) => {
       'payment.status': { $ne: 'paid' }
     }).sort({ runningNumber: 1 });
     
+    console.log(`📋 Table ${tableNumber} has ${activeOrders.length} active orders`);
     res.json(activeOrders);
   } catch (error) {
     console.error('Error fetching table orders:', error);
@@ -122,6 +124,8 @@ router.post('/', authenticate, async (req, res) => {
     let tableSessionId;
     let isAdditionalOrder = false;
     
+    console.log('📝 Creating order with data:', JSON.stringify(orderData, null, 2));
+    
     // Handle table session for dine-in orders
     if (orderData.orderType === 'dine-in' && orderData.tableNumber) {
       if (orderData.isAdditionalOrder && orderData.tableSessionId) {
@@ -133,6 +137,7 @@ router.post('/', authenticate, async (req, res) => {
         baseOrderNumber = await getBaseOrderNumberForTable(orderData.tableNumber);
         // Get next running number (1 for second order, 2 for third, etc.)
         runningNumber = await getNextRunningNumber(orderData.tableNumber, baseOrderNumber);
+        console.log(`📝 Additional order for table ${orderData.tableNumber}: baseOrderNumber=${baseOrderNumber}, runningNumber=${runningNumber}`);
       } else {
         // First order for this table - create new session
         tableSessionId = generateTableSessionId(orderData.tableNumber);
@@ -142,19 +147,23 @@ router.post('/', authenticate, async (req, res) => {
         const lastOrder = await Order.findOne().sort({ baseOrderNumber: -1 });
         baseOrderNumber = lastOrder ? lastOrder.baseOrderNumber + 1 : 1000000;
         runningNumber = 0; // First order has no suffix
+        console.log(`📝 First order for table ${orderData.tableNumber}: baseOrderNumber=${baseOrderNumber}, runningNumber=${runningNumber}`);
       }
     } else {
       // Non dine-in orders
       const lastOrder = await Order.findOne().sort({ baseOrderNumber: -1 });
       baseOrderNumber = lastOrder ? lastOrder.baseOrderNumber + 1 : 1000000;
       runningNumber = 0;
+      console.log(`📝 Non-dine-in order: baseOrderNumber=${baseOrderNumber}`);
     }
+    
+    const displayOrderNumber = runningNumber === 0 ? `${baseOrderNumber}` : `${baseOrderNumber}-${runningNumber}`;
     
     const order = new Order({
       ...orderData,
       baseOrderNumber,
       runningNumber,
-      displayOrderNumber: runningNumber === 0 ? `${baseOrderNumber}` : `${baseOrderNumber}-${runningNumber}`,
+      displayOrderNumber,
       tableSessionId,
       isAdditionalOrder,
       createdBy: req.userId,
@@ -162,6 +171,7 @@ router.post('/', authenticate, async (req, res) => {
     });
     
     await order.save();
+    console.log(`✅ Order saved: ${displayOrderNumber} (ID: ${order._id})`);
     
     const io = req.app.get('io');
     
@@ -172,27 +182,23 @@ router.post('/', authenticate, async (req, res) => {
       if (io) {
         io.emit('new-order', order);
         io.emit('order-updated', order);
+        io.emit('new-order-received', order);
         io.emit('table-status-changed', { 
           tableNumber: orderData.tableNumber, 
           status: activeOrdersCount > 0 ? 'running' : 'available',
           runningOrderCount: activeOrdersCount
         });
-        io.emit('table-order-added', {
-          tableNumber: orderData.tableNumber,
-          baseOrderNumber,
-          runningNumber,
-          displayOrderNumber: order.displayOrderNumber,
-          totalRunningOrders: activeOrdersCount
-        });
+        console.log(`📡 Emitted new-order event for ${displayOrderNumber}`);
       }
     } else {
       if (io) {
         io.emit('new-order', order);
         io.emit('order-updated', order);
+        io.emit('new-order-received', order);
+        console.log(`📡 Emitted new-order event for ${displayOrderNumber}`);
       }
     }
     
-    console.log(`✅ Order created: ${order.displayOrderNumber} for Table ${orderData.tableNumber || 'N/A'}`);
     res.status(201).json(order);
   } catch (error) {
     console.error('Error creating order:', error);
