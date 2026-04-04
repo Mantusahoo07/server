@@ -10,6 +10,39 @@ const generateTableSessionId = (tableNumber) => {
   return `table_${tableNumber}_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
 };
 
+// Helper function to update table status based on active orders
+const updateTableStatusFromOrders = async (tableNumber, io) => {
+  if (!tableNumber) return;
+  
+  const activeOrdersCount = await Order.countDocuments({
+    tableNumber: tableNumber,
+    status: { $in: ['pending', 'accepted', 'preparing', 'hold'] },
+    'payment.status': { $ne: 'paid' }
+  });
+  
+  const newStatus = activeOrdersCount > 0 ? 'running' : 'available';
+  
+  await Table.findOneAndUpdate(
+    { tableNumber: tableNumber },
+    { 
+      status: newStatus,
+      updatedAt: new Date()
+    },
+    { upsert: true }
+  );
+  
+  if (io) {
+    io.emit('table-status-changed', { 
+      tableNumber, 
+      status: newStatus, 
+      runningOrderCount: activeOrdersCount 
+    });
+  }
+  
+  console.log(`Table ${tableNumber} status updated to: ${newStatus} (${activeOrdersCount} active orders)`);
+  return activeOrdersCount;
+};
+
 // Get all orders
 router.get('/', authenticate, async (req, res) => {
   try {
@@ -124,47 +157,25 @@ router.post('/', authenticate, async (req, res) => {
     
     await order.save();
     
-    // Update table status to occupied if this is a dine-in order and first order
-    if (orderData.orderType === 'dine-in' && orderData.tableNumber && !orderData.isAdditionalOrder) {
-      await Table.findOneAndUpdate(
-        { tableNumber: orderData.tableNumber },
-        { 
-          status: 'occupied',
-          currentOrderId: order._id,
-          updatedAt: new Date()
-        },
-        { upsert: true }
-      );
-      console.log(`Table ${orderData.tableNumber} status updated to occupied`);
-    } else if (orderData.orderType === 'dine-in' && orderData.tableNumber && orderData.isAdditionalOrder) {
-      // Just update the currentOrderId to the latest order
-      await Table.findOneAndUpdate(
-        { tableNumber: orderData.tableNumber },
-        { 
-          currentOrderId: order._id,
-          updatedAt: new Date()
-        },
-        { upsert: true }
-      );
-      console.log(`Table ${orderData.tableNumber} additional order added`);
-    }
-    
     const io = req.app.get('io');
-    if (io) {
-      io.emit('new-order', order);
-      io.emit('order-updated', order);
-      if (orderData.orderType === 'dine-in' && orderData.tableNumber) {
-        // Get updated running order count
-        const runningOrdersCount = await Order.countDocuments({
-          tableNumber: orderData.tableNumber,
-          status: { $in: ['pending', 'accepted', 'preparing', 'hold'] },
-          'payment.status': { $ne: 'paid' }
-        });
+    
+    // Update table status based on active orders (now using running/available)
+    if (orderData.orderType === 'dine-in' && orderData.tableNumber) {
+      const activeOrdersCount = await updateTableStatusFromOrders(orderData.tableNumber, io);
+      
+      if (io) {
+        io.emit('new-order', order);
+        io.emit('order-updated', order);
         io.emit('table-status-changed', { 
           tableNumber: orderData.tableNumber, 
-          status: 'occupied',
-          runningOrderCount: runningOrdersCount
+          status: activeOrdersCount > 0 ? 'running' : 'available',
+          runningOrderCount: activeOrdersCount
         });
+      }
+    } else {
+      if (io) {
+        io.emit('new-order', order);
+        io.emit('order-updated', order);
       }
     }
     
@@ -374,33 +385,15 @@ router.patch('/:id/status', authenticate, async (req, res) => {
       if (status === 'ready_for_billing') io.emit('order-ready-for-billing', order._id);
       if (status === 'completed') io.emit('order-completed', order._id);
       
-      // If order is cancelled, check if table still has running orders
-      if (status === 'cancelled' && order.tableNumber) {
-        const runningOrdersCount = await Order.countDocuments({
-          tableNumber: order.tableNumber,
-          status: { $in: ['pending', 'accepted', 'preparing', 'hold'] },
-          'payment.status': { $ne: 'paid' },
-          _id: { $ne: order._id }
-        });
+      // If order is cancelled or completed, update table status
+      if ((status === 'cancelled' || status === 'completed') && order.tableNumber) {
+        const activeOrdersCount = await updateTableStatusFromOrders(order.tableNumber, io);
         
-        if (runningOrdersCount === 0) {
-          // No more running orders, make table available
-          await Table.findOneAndUpdate(
-            { tableNumber: order.tableNumber },
-            { status: 'available', currentOrderId: null, updatedAt: new Date() }
-          );
-          io.emit('table-status-changed', { 
-            tableNumber: order.tableNumber, 
-            status: 'available',
-            runningOrderCount: 0
-          });
-        } else {
-          io.emit('table-status-changed', { 
-            tableNumber: order.tableNumber, 
-            status: 'occupied',
-            runningOrderCount: runningOrdersCount
-          });
-        }
+        io.emit('table-status-changed', { 
+          tableNumber: order.tableNumber, 
+          status: activeOrdersCount > 0 ? 'running' : 'available',
+          runningOrderCount: activeOrdersCount
+        });
       }
     }
     
@@ -478,6 +471,17 @@ router.patch('/:id/complete-payment', authenticate, async (req, res) => {
     if (io) {
       io.emit('order-updated', order);
       if (status === 'completed') io.emit('order-completed', order._id);
+      
+      // Update table status after payment completion
+      if (order.tableNumber) {
+        const activeOrdersCount = await updateTableStatusFromOrders(order.tableNumber, io);
+        
+        io.emit('table-status-changed', { 
+          tableNumber: order.tableNumber, 
+          status: activeOrdersCount > 0 ? 'running' : 'available',
+          runningOrderCount: activeOrdersCount
+        });
+      }
     }
     
     res.json(order);
@@ -518,14 +522,14 @@ router.post('/table/:tableNumber/complete-billing', authenticate, async (req, re
       completedOrders.push(order);
     }
     
-    // Update table status to available
+    // Update table status to available (no more running orders)
     await Table.findOneAndUpdate(
       { tableNumber: tableNumber },
       { 
         status: 'available',
-        currentOrderId: null,
         updatedAt: new Date()
-      }
+      },
+      { upsert: true }
     );
     
     console.log(`✅ Billing completed for table ${tableNumber}, ${completedOrders.length} orders closed. Table status: available`);
@@ -583,6 +587,17 @@ router.post('/:id/credit-sale', authenticate, async (req, res) => {
     const io = req.app.get('io');
     if (io) {
       io.emit('order-updated', order);
+      
+      // Update table status after credit sale completion
+      if (order.tableNumber) {
+        const activeOrdersCount = await updateTableStatusFromOrders(order.tableNumber, io);
+        
+        io.emit('table-status-changed', { 
+          tableNumber: order.tableNumber, 
+          status: activeOrdersCount > 0 ? 'running' : 'available',
+          runningOrderCount: activeOrdersCount
+        });
+      }
     }
     
     res.json(order);
