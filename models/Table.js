@@ -41,10 +41,6 @@ const tableSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now }
 });
 
-// Drop the old index if it exists (run this once)
-// You may need to run this in MongoDB shell or via mongoose connection
-// db.tables.dropIndex('tableNo_1');
-
 const Table = mongoose.models.Table || mongoose.model('Table', tableSchema);
 
 export default Table;
