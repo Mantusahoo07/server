@@ -576,4 +576,193 @@ router.post('/:id/credit-sale', authenticate, async (req, res) => {
   }
 });
 
+// Request cancellation of an item from kitchen
+router.post('/:id/items/:itemId/request-cancellation', authenticate, async (req, res) => {
+  try {
+    const { reason } = req.body;
+    const order = await Order.findById(req.params.id);
+    
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    
+    const item = order.items.find(i => i.id === req.params.itemId);
+    if (!item) {
+      return res.status(404).json({ error: 'Item not found' });
+    }
+    
+    // Only allow cancellation request if item is not already completed or cancelled
+    if (item.status === 'completed') {
+      return res.status(400).json({ error: 'Cannot cancel completed items' });
+    }
+    
+    if (item.status === 'cancelled') {
+      return res.status(400).json({ error: 'Item already cancelled' });
+    }
+    
+    item.cancellationRequested = true;
+    item.cancellationRequestedAt = new Date();
+    item.cancellationRequestedBy = req.userId;
+    item.cancellationReason = reason || 'No reason provided';
+    item.status = 'cancellation_requested';
+    
+    await order.save();
+    
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('cancellation-requested', {
+        orderId: order._id,
+        itemId: item.id,
+        itemName: item.name,
+        quantity: item.quantity,
+        reason: item.cancellationReason,
+        orderNumber: order.displayOrderNumber || order.orderNumber,
+        tableNumber: order.tableNumber,
+        orderType: order.orderType,
+        deliveryPlatform: order.deliveryPlatform,
+        requestedAt: item.cancellationRequestedAt
+      });
+    }
+    
+    res.json({ message: 'Cancellation request sent', item });
+  } catch (error) {
+    console.error('Error requesting cancellation:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Approve cancellation (Admin/POS)
+router.post('/:id/items/:itemId/approve-cancellation', authenticate, async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.id);
+    
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    
+    const item = order.items.find(i => i.id === req.params.itemId);
+    if (!item) {
+      return res.status(404).json({ error: 'Item not found' });
+    }
+    
+    if (!item.cancellationRequested) {
+      return res.status(400).json({ error: 'No cancellation request for this item' });
+    }
+    
+    // Mark as cancelled and remove from order
+    item.status = 'cancelled';
+    item.isRemoved = true;
+    item.removedAt = new Date();
+    item.cancellationApproved = true;
+    item.cancellationApprovedAt = new Date();
+    item.cancellationApprovedBy = req.userId;
+    
+    // Update order totals
+    order.subtotal = order.items.reduce((sum, i) => sum + (i.price * i.quantity), 0);
+    order.tax = order.subtotal * (order.taxRate / 100);
+    order.serviceCharge = order.subtotal * (order.serviceChargeRate / 100);
+    order.total = order.subtotal + order.tax + order.serviceCharge;
+    order.updatedAt = new Date();
+    
+    await order.save();
+    
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('cancellation-approved', {
+        orderId: order._id,
+        itemId: item.id,
+        itemName: item.name,
+        orderNumber: order.displayOrderNumber || order.orderNumber
+      });
+    }
+    
+    res.json({ message: 'Cancellation approved', item });
+  } catch (error) {
+    console.error('Error approving cancellation:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Reject cancellation (Admin/POS)
+router.post('/:id/items/:itemId/reject-cancellation', authenticate, async (req, res) => {
+  try {
+    const { rejectReason } = req.body;
+    const order = await Order.findById(req.params.id);
+    
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    
+    const item = order.items.find(i => i.id === req.params.itemId);
+    if (!item) {
+      return res.status(404).json({ error: 'Item not found' });
+    }
+    
+    if (!item.cancellationRequested) {
+      return res.status(400).json({ error: 'No cancellation request for this item' });
+    }
+    
+    // Reset the item status
+    item.cancellationRequested = false;
+    item.cancellationRequestedAt = null;
+    item.cancellationRequestedBy = null;
+    item.cancellationReason = '';
+    item.status = 'pending';
+    
+    await order.save();
+    
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('cancellation-rejected', {
+        orderId: order._id,
+        itemId: item.id,
+        itemName: item.name,
+        rejectReason: rejectReason || 'No reason provided',
+        orderNumber: order.displayOrderNumber || order.orderNumber
+      });
+    }
+    
+    res.json({ message: 'Cancellation rejected', item });
+  } catch (error) {
+    console.error('Error rejecting cancellation:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get all pending cancellation requests
+router.get('/cancellation-requests/pending', authenticate, async (req, res) => {
+  try {
+    const orders = await Order.find({
+      'items.cancellationRequested': true,
+      'items.cancellationApproved': false
+    }).populate('items.cancellationRequestedBy', 'username');
+    
+    const pendingRequests = [];
+    orders.forEach(order => {
+      order.items.forEach(item => {
+        if (item.cancellationRequested && !item.cancellationApproved) {
+          pendingRequests.push({
+            orderId: order._id,
+            orderNumber: order.displayOrderNumber || order.orderNumber,
+            itemId: item.id,
+            itemName: item.name,
+            quantity: item.quantity,
+            reason: item.cancellationReason,
+            requestedAt: item.cancellationRequestedAt,
+            requestedBy: item.cancellationRequestedBy,
+            tableNumber: order.tableNumber,
+            orderType: order.orderType,
+            deliveryPlatform: order.deliveryPlatform
+          });
+        }
+      });
+    });
+    
+    res.json(pendingRequests);
+  } catch (error) {
+    console.error('Error fetching pending cancellations:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 export default router;
