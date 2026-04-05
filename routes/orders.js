@@ -10,24 +10,6 @@ const generateTableSessionId = (tableNumber) => {
   return `table_${tableNumber}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 };
 
-// Helper function to get the base order number for a table
-const getBaseOrderNumberForTable = async (tableNumber) => {
-  const table = await Table.findOne({ tableNumber: tableNumber });
-  if (table && table.baseOrderNumber) {
-    return table.baseOrderNumber;
-  }
-  
-  const lastOrder = await Order.findOne().sort({ baseOrderNumber: -1 });
-  const newBaseOrderNumber = lastOrder ? lastOrder.baseOrderNumber + 1 : 1000000;
-  
-  if (table) {
-    table.baseOrderNumber = newBaseOrderNumber;
-    await table.save();
-  }
-  
-  return newBaseOrderNumber;
-};
-
 // Helper function to update table status
 const updateTableStatusFromOrders = async (tableNumber, io) => {
   if (!tableNumber) return 0;
@@ -104,7 +86,7 @@ router.get('/:id', authenticate, async (req, res) => {
   }
 });
 
-// Create new order - ALL ID GENERATION HAPPENS HERE
+// Create new order
 router.post('/', authenticate, async (req, res) => {
   try {
     const orderData = req.body;
@@ -133,27 +115,30 @@ router.post('/', authenticate, async (req, res) => {
         await table.save();
       }
       
-      if (table.status === 'running' && table.currentSessionId) {
+      // Check if table has an active session (running orders)
+      if (table.status === 'running' && table.currentSessionId && table.baseOrderNumber) {
         // Additional order for existing table session
         tableSessionId = table.currentSessionId;
         isAdditionalOrder = true;
         baseOrderNumber = table.baseOrderNumber;
-        runningNumber = table.runningOrderCount;
+        runningNumber = table.runningOrderCount; // This will be 1, 2, 3, etc.
         
         console.log(`📝 Additional order for table ${orderData.tableNumber}: baseOrderNumber=${baseOrderNumber}, runningNumber=${runningNumber}`);
       } else {
         // First order for this table
         tableSessionId = generateTableSessionId(orderData.tableNumber);
         isAdditionalOrder = false;
-        runningNumber = 0;
+        runningNumber = 0; // First order has no suffix
         
+        // Generate new base order number
         const lastOrder = await Order.findOne().sort({ baseOrderNumber: -1 });
         baseOrderNumber = lastOrder ? lastOrder.baseOrderNumber + 1 : 1000000;
         
+        // Update table
         table.currentSessionId = tableSessionId;
         table.baseOrderNumber = baseOrderNumber;
         table.status = 'running';
-        table.runningOrderCount = 1;
+        table.runningOrderCount = 1; // First order
         await table.save();
         
         console.log(`📝 First order for table ${orderData.tableNumber}: baseOrderNumber=${baseOrderNumber}`);
@@ -167,7 +152,7 @@ router.post('/', authenticate, async (req, res) => {
     
     const displayOrderNumber = runningNumber === 0 ? `${baseOrderNumber}` : `${baseOrderNumber}-${runningNumber}`;
     
-    // Create order WITHOUT specifying _id - let MongoDB generate it
+    // Create order
     const order = new Order({
       ...orderData,
       baseOrderNumber,
@@ -185,27 +170,31 @@ router.post('/', authenticate, async (req, res) => {
     const savedOrder = await order.save();
     console.log(`✅ Order saved: ${displayOrderNumber} (ID: ${savedOrder._id})`);
     
+    // Update table running order count after order is saved
+    if (orderData.orderType === 'dine-in' && orderData.tableNumber) {
+      // Increment the running order count on the table
+      const table = await Table.findOne({ tableNumber: orderData.tableNumber });
+      if (table) {
+        table.runningOrderCount = table.runningOrderCount + 1;
+        await table.save();
+        console.log(`Table ${orderData.tableNumber} running order count updated to ${table.runningOrderCount}`);
+      }
+    }
+    
     const io = req.app.get('io');
     
-    // Update table status and emit events
-    if (orderData.orderType === 'dine-in' && orderData.tableNumber) {
-      const activeOrdersCount = await updateTableStatusFromOrders(orderData.tableNumber, io);
+    // Emit events
+    if (io) {
+      io.emit('new-order', savedOrder);
+      io.emit('order-updated', savedOrder);
+      io.emit('new-order-received', savedOrder);
       
-      if (io) {
-        io.emit('new-order', savedOrder);
-        io.emit('order-updated', savedOrder);
-        io.emit('new-order-received', savedOrder);
+      if (orderData.orderType === 'dine-in' && orderData.tableNumber) {
         io.emit('table-status-changed', { 
           tableNumber: orderData.tableNumber, 
-          status: activeOrdersCount > 0 ? 'running' : 'available',
-          runningOrderCount: activeOrdersCount
+          status: 'running',
+          runningOrderCount: (await Table.findOne({ tableNumber: orderData.tableNumber }))?.runningOrderCount || 1
         });
-      }
-    } else {
-      if (io) {
-        io.emit('new-order', savedOrder);
-        io.emit('order-updated', savedOrder);
-        io.emit('new-order-received', savedOrder);
       }
     }
     
@@ -269,13 +258,6 @@ router.post('/:id/items', authenticate, async (req, res) => {
     if (io) {
       io.emit('order-updated', order);
       io.emit('order-item-added', { orderId: order._id, item: newItem });
-      io.emit('order-modified', { 
-        orderId: order._id, 
-        displayOrderNumber: order.displayOrderNumber,
-        itemId: newItem.id,
-        oldQuantity: existingItem?.oldQuantity,
-        newQuantity: existingItem?.quantity
-      });
     }
     
     res.json(order);
@@ -293,12 +275,7 @@ router.delete('/:id/items/:itemId', authenticate, async (req, res) => {
       return res.status(404).json({ error: 'Order not found' });
     }
     
-    const itemIndex = order.items.findIndex(i => i.id === req.params.itemId);
-    if (itemIndex === -1) {
-      return res.status(404).json({ error: 'Item not found' });
-    }
-    
-    order.items.splice(itemIndex, 1);
+    order.items = order.items.filter(i => i.id !== req.params.itemId);
     
     // Update totals
     order.subtotal = order.items.reduce((sum, i) => sum + (i.price * i.quantity), 0);
@@ -357,13 +334,6 @@ router.patch('/:id/items/:itemId', authenticate, async (req, res) => {
     const io = req.app.get('io');
     if (io) {
       io.emit('order-updated', order);
-      io.emit('order-modified', { 
-        orderId: order._id, 
-        displayOrderNumber: order.displayOrderNumber,
-        itemId: req.params.itemId,
-        oldQuantity,
-        newQuantity: quantity
-      });
     }
     
     res.json(order);
