@@ -9,13 +9,21 @@ const orderItemSchema = new mongoose.Schema({
   categoryName: { type: String, default: '' },
   categorySortOrder: { type: Number, default: 0 },
   specialInstructions: String,
-  status: { type: String, default: 'pending', enum: ['pending', 'preparing', 'completed'] },
+  status: { type: String, default: 'pending', enum: ['pending', 'preparing', 'completed', 'cancellation_requested', 'cancelled'] },
   completedAt: Date,
   isModified: { type: Boolean, default: false },
   isRemoved: { type: Boolean, default: false },
   modifiedAt: Date,
   removedAt: Date,
-  oldQuantity: Number
+  oldQuantity: Number,
+  // New fields for cancellation requests
+  cancellationRequested: { type: Boolean, default: false },
+  cancellationRequestedAt: Date,
+  cancellationRequestedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  cancellationReason: { type: String, default: '' },
+  cancellationApproved: { type: Boolean, default: false },
+  cancellationApprovedAt: Date,
+  cancellationApprovedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
 });
 
 const orderSchema = new mongoose.Schema({
