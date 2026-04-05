@@ -106,8 +106,21 @@ orderSchema.index({ displayOrderNumber: 1 });
 orderSchema.index({ status: 1 });
 orderSchema.index({ createdAt: -1 });
 
-// Pre-save middleware
+// Add a pre-save middleware to ensure totals are always correct
 orderSchema.pre('save', function(next) {
+  // Recalculate totals from items
+  if (this.items && this.items.length > 0) {
+    this.subtotal = this.items.reduce((sum, i) => sum + (i.price * i.quantity), 0);
+    this.tax = this.subtotal * (this.taxRate / 100);
+    this.serviceCharge = this.subtotal * (this.serviceChargeRate / 100);
+    this.total = this.subtotal + this.tax + this.serviceCharge;
+  } else {
+    this.subtotal = 0;
+    this.tax = 0;
+    this.serviceCharge = 0;
+    this.total = 0;
+  }
+  
   if (this.orderType !== 'delivery') {
     this.deliveryPlatform = undefined;
     this.deliveryAddress = undefined;
