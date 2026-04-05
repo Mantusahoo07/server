@@ -125,23 +125,23 @@ router.post('/', authenticate, async (req, res) => {
         
         console.log(`📝 Additional order for table ${orderData.tableNumber}: baseOrderNumber=${baseOrderNumber}, runningNumber=${runningNumber}`);
       } else {
-        // First order for this table
+        // FIRST ORDER AFTER TABLE IS AVAILABLE - Start new session
         tableSessionId = generateTableSessionId(orderData.tableNumber);
         isAdditionalOrder = false;
         runningNumber = 0; // First order has no suffix
         
-        // Generate new base order number
+        // Generate NEW base order number (increment from last order overall)
         const lastOrder = await Order.findOne().sort({ baseOrderNumber: -1 });
         baseOrderNumber = lastOrder ? lastOrder.baseOrderNumber + 1 : 1000000;
         
-        // Update table
+        // Update table with new session
         table.currentSessionId = tableSessionId;
         table.baseOrderNumber = baseOrderNumber;
         table.status = 'running';
         table.runningOrderCount = 1; // First order
         await table.save();
         
-        console.log(`📝 First order for table ${orderData.tableNumber}: baseOrderNumber=${baseOrderNumber}`);
+        console.log(`📝 NEW SESSION - First order for table ${orderData.tableNumber}: baseOrderNumber=${baseOrderNumber}`);
       }
     } else {
       // Non dine-in orders
@@ -170,9 +170,8 @@ router.post('/', authenticate, async (req, res) => {
     const savedOrder = await order.save();
     console.log(`✅ Order saved: ${displayOrderNumber} (ID: ${savedOrder._id})`);
     
-    // Update table running order count after order is saved
-    if (orderData.orderType === 'dine-in' && orderData.tableNumber) {
-      // Increment the running order count on the table
+    // Update table running order count after order is saved (only for additional orders)
+    if (orderData.orderType === 'dine-in' && orderData.tableNumber && isAdditionalOrder) {
       const table = await Table.findOne({ tableNumber: orderData.tableNumber });
       if (table) {
         table.runningOrderCount = table.runningOrderCount + 1;
@@ -190,10 +189,12 @@ router.post('/', authenticate, async (req, res) => {
       io.emit('new-order-received', savedOrder);
       
       if (orderData.orderType === 'dine-in' && orderData.tableNumber) {
+        const updatedTable = await Table.findOne({ tableNumber: orderData.tableNumber });
         io.emit('table-status-changed', { 
           tableNumber: orderData.tableNumber, 
           status: 'running',
-          runningOrderCount: (await Table.findOne({ tableNumber: orderData.tableNumber }))?.runningOrderCount || 1
+          runningOrderCount: updatedTable?.runningOrderCount || 1,
+          baseOrderNumber: updatedTable?.baseOrderNumber
         });
       }
     }
@@ -470,7 +471,6 @@ router.patch('/:id/complete-payment', authenticate, async (req, res) => {
   }
 });
 
-// Complete billing for table
 // Complete billing for table (close all orders and reset table)
 router.post('/table/:tableNumber/complete-billing', authenticate, async (req, res) => {
   try {
