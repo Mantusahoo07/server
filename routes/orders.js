@@ -558,7 +558,8 @@ router.post('/table/:tableNumber/complete-billing', authenticate, async (req, re
     
     const query = {
       tableNumber: tableNumber,
-      status: { $in: ['pending', 'accepted', 'preparing', 'hold', 'ready_for_billing'] }
+      status: { $in: ['pending', 'accepted', 'preparing', 'hold', 'ready_for_billing'] },
+      'payment.status': { $ne: 'paid' }
     };
     
     if (sessionId) {
