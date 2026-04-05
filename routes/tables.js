@@ -10,19 +10,29 @@ router.get('/', async (req, res) => {
   try {
     const tables = await Table.find({}).sort({ tableNumber: 1 });
     
-    // Enrich with active order count for each table
+    // Enrich with active order details
     const tablesWithDetails = await Promise.all(tables.map(async (table) => {
       const activeOrders = await Order.find({
         tableNumber: table.tableNumber,
-        status: { $in: ['pending', 'accepted', 'preparing', 'hold'] },
+        status: { $in: ['pending', 'accepted', 'preparing', 'hold', 'ready_for_billing'] },
         'payment.status': { $ne: 'paid' }
-      }).sort({ createdAt: 1 });
+      }).sort({ runningNumber: 1 });
+      
+      const totalAmount = activeOrders.reduce((sum, o) => sum + (o.total || 0), 0);
       
       return {
         ...table.toObject(),
         runningOrderCount: activeOrders.length,
-        runningOrders: activeOrders.map(o => ({ orderNumber: o.orderNumber, total: o.total, status: o.status })),
-        totalRunningAmount: activeOrders.reduce((sum, o) => sum + (o.total || 0), 0),
+        runningOrders: activeOrders.map(o => ({ 
+          id: o._id,
+          displayOrderNumber: o.displayOrderNumber, 
+          orderNumber: o.orderNumber,
+          runningNumber: o.runningNumber,
+          total: o.total, 
+          status: o.status,
+          isRunningOrder: o.isRunningOrder
+        })),
+        totalRunningAmount: totalAmount,
         selectable: true
       };
     }));
@@ -44,15 +54,26 @@ router.get('/:tableNumber', async (req, res) => {
     
     const activeOrders = await Order.find({
       tableNumber: parseInt(req.params.tableNumber),
-      status: { $in: ['pending', 'accepted', 'preparing', 'hold'] },
+      status: { $in: ['pending', 'accepted', 'preparing', 'hold', 'ready_for_billing'] },
       'payment.status': { $ne: 'paid' }
-    }).sort({ createdAt: 1 });
+    }).sort({ runningNumber: 1 });
+    
+    const totalAmount = activeOrders.reduce((sum, o) => sum + (o.total || 0), 0);
     
     res.json({
       ...table.toObject(),
-      runningOrders: activeOrders,
+      runningOrders: activeOrders.map(o => ({ 
+        id: o._id,
+        displayOrderNumber: o.displayOrderNumber,
+        orderNumber: o.orderNumber,
+        runningNumber: o.runningNumber,
+        total: o.total, 
+        status: o.status,
+        items: o.items,
+        isRunningOrder: o.isRunningOrder
+      })),
       runningOrderCount: activeOrders.length,
-      totalRunningAmount: activeOrders.reduce((sum, o) => sum + (o.total || 0), 0),
+      totalRunningAmount: totalAmount,
       selectable: true
     });
   } catch (error) {
@@ -100,14 +121,16 @@ router.patch('/:tableNumber', authenticate, authorize('admin', 'manager'), async
   try {
     const { capacity, section, status } = req.body;
     
-    if (status && !['available', 'running'].includes(status)) {
-      return res.status(400).json({ error: 'Invalid status. Must be available or running' });
-    }
-    
-    if (capacity !== undefined) {
-      const capacityNum = parseInt(capacity);
-      if (isNaN(capacityNum) || capacityNum < 1 || capacityNum > 20) {
-        return res.status(400).json({ error: 'Capacity must be between 1 and 20' });
+    // Prevent setting status to available if there are running orders
+    if (status === 'available') {
+      const activeOrdersCount = await Order.countDocuments({
+        tableNumber: parseInt(req.params.tableNumber),
+        status: { $in: ['pending', 'accepted', 'preparing', 'hold', 'ready_for_billing'] },
+        'payment.status': { $ne': 'paid' }
+      });
+      
+      if (activeOrdersCount > 0) {
+        return res.status(400).json({ error: 'Cannot set table to available while orders are running. Complete billing first.' });
       }
     }
     
@@ -150,7 +173,7 @@ router.delete('/:tableNumber', authenticate, authorize('admin'), async (req, res
     
     const activeOrders = await Order.countDocuments({
       tableNumber: parseInt(req.params.tableNumber),
-      status: { $in: ['pending', 'accepted', 'preparing', 'hold'] },
+      status: { $in: ['pending', 'accepted', 'preparing', 'hold', 'ready_for_billing'] },
       'payment.status': { $ne: 'paid' }
     });
     
@@ -173,7 +196,7 @@ router.patch('/:tableNumber/update-status', async (req, res) => {
     
     const activeOrdersCount = await Order.countDocuments({
       tableNumber: tableNumber,
-      status: { $in: ['pending', 'accepted', 'preparing', 'hold'] },
+      status: { $in: ['pending', 'accepted', 'preparing', 'hold', 'ready_for_billing'] },
       'payment.status': { $ne: 'paid' }
     });
     
@@ -183,6 +206,7 @@ router.patch('/:tableNumber/update-status', async (req, res) => {
       { tableNumber: tableNumber },
       { 
         status: newStatus,
+        runningOrderCount: activeOrdersCount,
         updatedAt: new Date()
       },
       { new: true }
@@ -190,6 +214,13 @@ router.patch('/:tableNumber/update-status', async (req, res) => {
     
     if (!table) {
       return res.status(404).json({ error: 'Table not found' });
+    }
+    
+    // If no active orders, clear session
+    if (activeOrdersCount === 0) {
+      table.currentSessionId = null;
+      table.baseOrderNumber = null;
+      await table.save();
     }
     
     const io = req.app.get('io');
