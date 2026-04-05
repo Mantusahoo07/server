@@ -126,7 +126,7 @@ router.patch('/:tableNumber', authenticate, authorize('admin', 'manager'), async
       const activeOrdersCount = await Order.countDocuments({
         tableNumber: parseInt(req.params.tableNumber),
         status: { $in: ['pending', 'accepted', 'preparing', 'hold', 'ready_for_billing'] },
-        'payment.status': { $ne': 'paid' }
+        'payment.status': { $ne: 'paid' }
       });
       
       if (activeOrdersCount > 0) {
