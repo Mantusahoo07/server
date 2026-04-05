@@ -12,60 +12,75 @@ const generateTableSessionId = (tableNumber) => {
 
 // Helper function to get the base order number for a table
 const getBaseOrderNumberForTable = async (tableNumber) => {
-  const firstOrder = await Order.findOne({
-    tableNumber: tableNumber,
-    isAdditionalOrder: false
-  }).sort({ createdAt: 1 });
-  
-  if (firstOrder && firstOrder.baseOrderNumber) {
-    return firstOrder.baseOrderNumber;
+  // Check if table already has a base order number
+  const table = await Table.findOne({ tableNumber: tableNumber });
+  if (table && table.baseOrderNumber) {
+    return table.baseOrderNumber;
   }
   
   // Generate new base order number
   const lastOrder = await Order.findOne().sort({ baseOrderNumber: -1 });
-  return lastOrder ? lastOrder.baseOrderNumber + 1 : 1000000;
+  const newBaseOrderNumber = lastOrder ? lastOrder.baseOrderNumber + 1 : 1000000;
+  
+  // Save to table
+  if (table) {
+    table.baseOrderNumber = newBaseOrderNumber;
+    await table.save();
+  }
+  
+  return newBaseOrderNumber;
 };
 
 // Helper function to get next running number for a table
 const getNextRunningNumber = async (tableNumber, baseOrderNumber) => {
-  const ordersForTable = await Order.find({
-    tableNumber: tableNumber,
-    baseOrderNumber: baseOrderNumber
-  }).sort({ runningNumber: 1 });
+  // Get the table to get current running count
+  const table = await Table.findOne({ tableNumber: tableNumber });
+  if (table && table.runningOrderCount !== undefined) {
+    return table.runningOrderCount;
+  }
   
-  // First order has runningNumber = 0
-  // Second order should have runningNumber = 1
-  // Third order should have runningNumber = 2, etc.
-  return ordersForTable.length;
+  // Fallback: count orders for this table with same baseOrderNumber
+  const ordersForTable = await Order.countDocuments({
+    tableNumber: tableNumber,
+    baseOrderNumber: baseOrderNumber,
+    status: { $nin: ['completed', 'cancelled'] }
+  });
+  
+  return ordersForTable;
 };
 
 // Helper function to update table status based on active orders
 const updateTableStatusFromOrders = async (tableNumber, io) => {
-  if (!tableNumber) return;
+  if (!tableNumber) return 0;
   
   const activeOrdersCount = await Order.countDocuments({
     tableNumber: tableNumber,
-    status: { $in: ['pending', 'accepted', 'preparing', 'hold'] },
+    status: { $in: ['pending', 'accepted', 'preparing', 'hold', 'ready_for_billing'] },
     'payment.status': { $ne: 'paid' }
   });
   
-  const newStatus = activeOrdersCount > 0 ? 'running' : 'available';
+  const table = await Table.findOne({ tableNumber: tableNumber });
   
-  await Table.findOneAndUpdate(
-    { tableNumber: tableNumber },
-    { 
-      status: newStatus,
-      updatedAt: new Date()
-    },
-    { upsert: true }
-  );
-  
-  if (io) {
-    io.emit('table-status-changed', { 
-      tableNumber, 
-      status: newStatus, 
-      runningOrderCount: activeOrdersCount 
-    });
+  if (table) {
+    const newStatus = activeOrdersCount > 0 ? 'running' : 'available';
+    table.status = newStatus;
+    table.runningOrderCount = activeOrdersCount;
+    
+    if (activeOrdersCount === 0) {
+      // Reset session when no active orders
+      table.currentSessionId = null;
+      table.baseOrderNumber = null;
+    }
+    
+    await table.save();
+    
+    if (io) {
+      io.emit('table-status-changed', { 
+        tableNumber, 
+        status: newStatus, 
+        runningOrderCount: activeOrdersCount 
+      });
+    }
   }
   
   return activeOrdersCount;
@@ -90,7 +105,7 @@ router.get('/table/:tableNumber/active', authenticate, async (req, res) => {
     
     const activeOrders = await Order.find({
       tableNumber: tableNumber,
-      status: { $in: ['pending', 'accepted', 'preparing', 'hold'] },
+      status: { $in: ['pending', 'accepted', 'preparing', 'hold', 'ready_for_billing'] },
       'payment.status': { $ne: 'paid' }
     }).sort({ runningNumber: 1 });
     
@@ -128,25 +143,47 @@ router.post('/', authenticate, async (req, res) => {
     
     // Handle table session for dine-in orders
     if (orderData.orderType === 'dine-in' && orderData.tableNumber) {
-      if (orderData.isAdditionalOrder && orderData.tableSessionId) {
+      // Check if table has an active session
+      let table = await Table.findOne({ tableNumber: orderData.tableNumber });
+      
+      if (!table) {
+        // Create table if it doesn't exist
+        table = new Table({
+          tableNumber: orderData.tableNumber,
+          status: 'available',
+          capacity: 4
+        });
+        await table.save();
+      }
+      
+      if (table.status === 'running' && table.currentSessionId) {
         // This is an additional order for existing table session
-        tableSessionId = orderData.tableSessionId;
+        tableSessionId = table.currentSessionId;
         isAdditionalOrder = true;
         
-        // Get the base order number from the first order of this table
-        baseOrderNumber = await getBaseOrderNumberForTable(orderData.tableNumber);
+        // Get the base order number from the table
+        baseOrderNumber = table.baseOrderNumber;
         // Get next running number (1 for second order, 2 for third, etc.)
-        runningNumber = await getNextRunningNumber(orderData.tableNumber, baseOrderNumber);
+        runningNumber = table.runningOrderCount;
+        
         console.log(`📝 Additional order for table ${orderData.tableNumber}: baseOrderNumber=${baseOrderNumber}, runningNumber=${runningNumber}`);
       } else {
         // First order for this table - create new session
         tableSessionId = generateTableSessionId(orderData.tableNumber);
         isAdditionalOrder = false;
+        runningNumber = 0; // First order has no suffix
         
         // Generate new base order number
         const lastOrder = await Order.findOne().sort({ baseOrderNumber: -1 });
         baseOrderNumber = lastOrder ? lastOrder.baseOrderNumber + 1 : 1000000;
-        runningNumber = 0; // First order has no suffix
+        
+        // Update table
+        table.currentSessionId = tableSessionId;
+        table.baseOrderNumber = baseOrderNumber;
+        table.status = 'running';
+        table.runningOrderCount = 1;
+        await table.save();
+        
         console.log(`📝 First order for table ${orderData.tableNumber}: baseOrderNumber=${baseOrderNumber}, runningNumber=${runningNumber}`);
       }
     } else {
@@ -166,6 +203,7 @@ router.post('/', authenticate, async (req, res) => {
       displayOrderNumber,
       tableSessionId,
       isAdditionalOrder,
+      isRunningOrder: runningNumber > 0,
       createdBy: req.userId,
       timerStart: new Date()
     });
@@ -175,7 +213,7 @@ router.post('/', authenticate, async (req, res) => {
     
     const io = req.app.get('io');
     
-    // Update table status
+    // Update table running order count
     if (orderData.orderType === 'dine-in' && orderData.tableNumber) {
       const activeOrdersCount = await updateTableStatusFromOrders(orderData.tableNumber, io);
       
@@ -512,7 +550,7 @@ router.patch('/:id/complete-payment', authenticate, async (req, res) => {
   }
 });
 
-// Complete billing for table
+// Complete billing for table (close all orders and make table available)
 router.post('/table/:tableNumber/complete-billing', authenticate, async (req, res) => {
   try {
     const tableNumber = parseInt(req.params.tableNumber);
@@ -543,14 +581,15 @@ router.post('/table/:tableNumber/complete-billing', authenticate, async (req, re
       completedOrders.push(order);
     }
     
-    await Table.findOneAndUpdate(
-      { tableNumber: tableNumber },
-      { 
-        status: 'available',
-        updatedAt: new Date()
-      },
-      { upsert: true }
-    );
+    // Reset table status to available
+    const table = await Table.findOne({ tableNumber: tableNumber });
+    if (table) {
+      table.status = 'available';
+      table.currentSessionId = null;
+      table.baseOrderNumber = null;
+      table.runningOrderCount = 0;
+      await table.save();
+    }
     
     console.log(`✅ Billing completed for table ${tableNumber}, ${completedOrders.length} orders closed.`);
     
