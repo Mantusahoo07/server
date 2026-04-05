@@ -632,6 +632,7 @@ router.post('/:id/items/:itemId/request-cancellation', authenticate, async (req,
 });
 
 // Approve cancellation (Admin/POS)
+// Approve cancellation (Admin/POS)
 router.post('/:id/items/:itemId/approve-cancellation', authenticate, async (req, res) => {
   try {
     const order = await Order.findById(req.params.id);
@@ -640,10 +641,12 @@ router.post('/:id/items/:itemId/approve-cancellation', authenticate, async (req,
       return res.status(404).json({ error: 'Order not found' });
     }
     
-    const item = order.items.find(i => i.id === req.params.itemId);
-    if (!item) {
+    const itemIndex = order.items.findIndex(i => i.id === req.params.itemId);
+    if (itemIndex === -1) {
       return res.status(404).json({ error: 'Item not found' });
     }
+    
+    const item = order.items[itemIndex];
     
     if (!item.cancellationRequested) {
       return res.status(400).json({ error: 'No cancellation request for this item' });
@@ -657,12 +660,23 @@ router.post('/:id/items/:itemId/approve-cancellation', authenticate, async (req,
     item.cancellationApprovedAt = new Date();
     item.cancellationApprovedBy = req.userId;
     
+    // Remove the item from the items array (or keep but mark as removed)
+    // Let's remove it completely to update the order view
+    order.items.splice(itemIndex, 1);
+    
     // Update order totals
     order.subtotal = order.items.reduce((sum, i) => sum + (i.price * i.quantity), 0);
     order.tax = order.subtotal * (order.taxRate / 100);
     order.serviceCharge = order.subtotal * (order.serviceChargeRate / 100);
     order.total = order.subtotal + order.tax + order.serviceCharge;
     order.updatedAt = new Date();
+    
+    // If no items left, cancel the entire order
+    if (order.items.length === 0) {
+      order.status = 'cancelled';
+      order.cancelledAt = new Date();
+      order.cancelledBy = req.userId;
+    }
     
     await order.save();
     
@@ -674,9 +688,10 @@ router.post('/:id/items/:itemId/approve-cancellation', authenticate, async (req,
         itemName: item.name,
         orderNumber: order.displayOrderNumber || order.orderNumber
       });
+      io.emit('order-updated', order);
     }
     
-    res.json({ message: 'Cancellation approved', item });
+    res.json({ message: 'Cancellation approved', order });
   } catch (error) {
     console.error('Error approving cancellation:', error);
     res.status(500).json({ error: error.message });
