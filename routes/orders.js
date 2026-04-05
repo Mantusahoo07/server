@@ -660,11 +660,10 @@ router.post('/:id/items/:itemId/approve-cancellation', authenticate, async (req,
     item.cancellationApprovedAt = new Date();
     item.cancellationApprovedBy = req.userId;
     
-    // Remove the item from the items array (or keep but mark as removed)
-    // Let's remove it completely to update the order view
+    // Remove the item from the items array
     order.items.splice(itemIndex, 1);
     
-    // Update order totals
+    // RECALCULATE ALL TOTALS
     order.subtotal = order.items.reduce((sum, i) => sum + (i.price * i.quantity), 0);
     order.tax = order.subtotal * (order.taxRate / 100);
     order.serviceCharge = order.subtotal * (order.serviceChargeRate / 100);
@@ -679,6 +678,8 @@ router.post('/:id/items/:itemId/approve-cancellation', authenticate, async (req,
     }
     
     await order.save();
+    
+    console.log(`✅ Cancellation approved for item ${item.name}. New order total: ${order.total}`);
     
     const io = req.app.get('io');
     if (io) {
@@ -735,15 +736,15 @@ router.post('/:id/items/:itemId/reject-cancellation', authenticate, async (req, 
         rejectReason: rejectReason || 'No reason provided',
         orderNumber: order.displayOrderNumber || order.orderNumber
       });
+      io.emit('order-updated', order);
     }
     
-    res.json({ message: 'Cancellation rejected', item });
+    res.json({ message: 'Cancellation rejected', order });
   } catch (error) {
     console.error('Error rejecting cancellation:', error);
     res.status(500).json({ error: error.message });
   }
 });
-
 // Get all pending cancellation requests
 router.get('/cancellation-requests/pending', authenticate, async (req, res) => {
   try {
