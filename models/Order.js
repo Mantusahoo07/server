@@ -50,6 +50,7 @@ const orderSchema = new mongoose.Schema({
   tableNumber: { type: Number, min: 1, max: 20, default: null },
   tableSessionId: { type: String, default: null },
   isAdditionalOrder: { type: Boolean, default: false },
+  isRunningOrder: { type: Boolean, default: false },
   parentOrderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Order', default: null },
   customer: {
     name: { type: String, default: 'Walk-In' },
@@ -124,6 +125,9 @@ orderSchema.pre('save', function(next) {
   
   // For backward compatibility
   this.orderNumber = this.baseOrderNumber;
+  
+  // Mark as running order if it's an additional order (runningNumber > 0)
+  this.isRunningOrder = this.runningNumber > 0;
   
   this.updatedAt = new Date();
   next();
