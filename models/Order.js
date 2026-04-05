@@ -126,7 +126,7 @@ orderSchema.pre('save', function(next) {
   // For backward compatibility
   this.orderNumber = this.baseOrderNumber;
   
-  // Mark as running order if it's an additional order (runningNumber > 0)
+  // Mark as running order if runningNumber > 0
   this.isRunningOrder = this.runningNumber > 0;
   
   this.updatedAt = new Date();
