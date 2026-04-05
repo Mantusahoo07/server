@@ -471,6 +471,7 @@ router.patch('/:id/complete-payment', authenticate, async (req, res) => {
 });
 
 // Complete billing for table
+// Complete billing for table (close all orders and reset table)
 router.post('/table/:tableNumber/complete-billing', authenticate, async (req, res) => {
   try {
     const tableNumber = parseInt(req.params.tableNumber);
@@ -485,6 +486,7 @@ router.post('/table/:tableNumber/complete-billing', authenticate, async (req, re
       return res.status(404).json({ error: 'No active orders found for this table' });
     }
     
+    // Complete all active orders
     for (const order of activeOrders) {
       order.status = 'completed';
       order.completedAt = new Date();
@@ -493,6 +495,7 @@ router.post('/table/:tableNumber/complete-billing', authenticate, async (req, re
       await order.save();
     }
     
+    // RESET TABLE - Clear session and base order number
     const table = await Table.findOne({ tableNumber: tableNumber });
     if (table) {
       table.status = 'available';
@@ -500,17 +503,24 @@ router.post('/table/:tableNumber/complete-billing', authenticate, async (req, re
       table.baseOrderNumber = null;
       table.runningOrderCount = 0;
       await table.save();
+      console.log(`✅ Table ${tableNumber} reset to available, session cleared`);
     }
     
     const io = req.app.get('io');
     if (io) {
       io.emit('table-billing-completed', { tableNumber, orders: activeOrders });
-      io.emit('table-status-changed', { tableNumber, status: 'available', runningOrderCount: 0 });
+      io.emit('table-status-changed', { 
+        tableNumber, 
+        status: 'available', 
+        runningOrderCount: 0,
+        reset: true 
+      });
     }
     
     res.json({ 
       message: `Billing completed for table ${tableNumber}`,
-      count: activeOrders.length
+      count: activeOrders.length,
+      tableReset: true
     });
   } catch (error) {
     console.error('Error completing table billing:', error);
