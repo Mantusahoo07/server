@@ -17,6 +17,18 @@ const tableSchema = new mongoose.Schema({
     type: Number,
     default: 4
   },
+  currentSessionId: {
+    type: String,
+    default: null
+  },
+  baseOrderNumber: {
+    type: Number,
+    default: null
+  },
+  runningOrderCount: {
+    type: Number,
+    default: 0
+  },
   currentOrderIds: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Order'
