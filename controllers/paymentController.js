@@ -118,15 +118,17 @@ export const creditSale = async (req, res) => {
     
     order.payment = {
       method: 'credit',
-      status: 'pending',
+      status: 'credit_due', // Changed from 'pending' to 'credit_due' for better tracking
       amount: amount,
+      transactionId: `CREDIT_${Date.now()}`,
+      timestamp: new Date(),
+      dueDate: dueDate ? new Date(dueDate) : null,
       customerName,
       customerPhone,
-      customerEmail,
-      dueDate: new Date(dueDate),
-      timestamp: new Date()
+      customerEmail: customerEmail || ''
     };
     order.status = 'completed';
+    order.completedAt = new Date();
     
     await order.save();
     
