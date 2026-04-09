@@ -1,3 +1,4 @@
+// models/Cart.js
 import mongoose from 'mongoose';
 
 const cartItemSchema = new mongoose.Schema({
@@ -6,19 +7,25 @@ const cartItemSchema = new mongoose.Schema({
   fullName: { type: String, required: true },
   price: { type: Number, required: true },
   quantity: { type: Number, default: 1 },
-  category: String,
-  categoryIcon: String,
-  available: { type: Boolean, default: true },
-  prepTime: Number
+  categoryId: { type: String, default: null },
+  categoryName: { type: String, default: '' },
+  categorySortOrder: { type: Number, default: 0 },
+  prepTime: { type: Number, default: 10 },
+  available: { type: Boolean, default: true }
 });
 
 const cartSchema = new mongoose.Schema({
-  sessionId: { type: String, required: true, unique: true },
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  userId: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'User', 
+    required: true,
+    unique: true  // One cart per user
+  },
+  sessionId: { type: String, default: null },
   items: [cartItemSchema],
   specialInstructions: { type: Map, of: String, default: {} },
   orderType: { type: String, default: 'dine-in' },
-  deliveryPlatform: { type: String, default: 'home' },
+  deliveryPlatform: { type: String, default: null },
   deliveryAddress: { type: String, default: '' },
   customerName: { type: String, default: '' },
   customerPhone: { type: String, default: '' },
@@ -27,10 +34,8 @@ const cartSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
-// Generate a simple session ID
-cartSchema.statics.generateSessionId = function() {
-  return 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-};
+// Index for faster queries
+cartSchema.index({ userId: 1 });
 
 const Cart = mongoose.models.Cart || mongoose.model('Cart', cartSchema);
 
