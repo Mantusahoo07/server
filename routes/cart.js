@@ -1,4 +1,3 @@
-// routes/cart.js
 import express from 'express';
 import Cart from '../models/Cart.js';
 import { authenticate } from '../middleware/auth.js';
@@ -8,6 +7,8 @@ const router = express.Router();
 // Get user's cart (authenticated)
 router.get('/', authenticate, async (req, res) => {
   try {
+    console.log('Fetching cart for user:', req.userId);
+    
     let cart = await Cart.findOne({ userId: req.userId });
     
     if (!cart) {
@@ -18,6 +19,7 @@ router.get('/', authenticate, async (req, res) => {
         specialInstructions: {}
       });
       await cart.save();
+      console.log('Created new empty cart for user:', req.userId);
     }
     
     res.json(cart);
@@ -31,6 +33,8 @@ router.get('/', authenticate, async (req, res) => {
 router.post('/', authenticate, async (req, res) => {
   try {
     const { items, specialInstructions, orderType, deliveryPlatform, deliveryAddress, customerName, customerPhone, tableNumber } = req.body;
+    
+    console.log('Saving cart for user:', req.userId);
     
     let cart = await Cart.findOne({ userId: req.userId });
     
@@ -49,6 +53,7 @@ router.post('/', authenticate, async (req, res) => {
     cart.lastUpdated = new Date();
     
     await cart.save();
+    console.log('Cart saved successfully for user:', req.userId);
     res.json(cart);
   } catch (error) {
     console.error('Error saving cart:', error);
@@ -64,6 +69,8 @@ router.post('/items', authenticate, async (req, res) => {
     if (!item || !item.id) {
       return res.status(400).json({ error: 'Item ID is required' });
     }
+    
+    console.log('Adding item to cart for user:', req.userId, item);
     
     let cart = await Cart.findOne({ userId: req.userId });
     
@@ -91,6 +98,7 @@ router.post('/items', authenticate, async (req, res) => {
     cart.lastUpdated = new Date();
     await cart.save();
     
+    console.log('Item added successfully');
     res.json(cart);
   } catch (error) {
     console.error('Error adding item to cart:', error);
@@ -102,6 +110,8 @@ router.post('/items', authenticate, async (req, res) => {
 router.patch('/items/:itemId', authenticate, async (req, res) => {
   try {
     const { quantity } = req.body;
+    console.log('Updating item quantity for user:', req.userId, 'item:', req.params.itemId, 'quantity:', quantity);
+    
     const cart = await Cart.findOne({ userId: req.userId });
     
     if (!cart) {
@@ -130,6 +140,8 @@ router.patch('/items/:itemId', authenticate, async (req, res) => {
 // Remove item from cart
 router.delete('/items/:itemId', authenticate, async (req, res) => {
   try {
+    console.log('Removing item from cart for user:', req.userId, 'item:', req.params.itemId);
+    
     const cart = await Cart.findOne({ userId: req.userId });
     
     if (!cart) {
@@ -150,6 +162,8 @@ router.delete('/items/:itemId', authenticate, async (req, res) => {
 // Clear cart
 router.delete('/clear', authenticate, async (req, res) => {
   try {
+    console.log('Clearing cart for user:', req.userId);
+    
     const cart = await Cart.findOne({ userId: req.userId });
     
     if (cart) {
