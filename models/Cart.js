@@ -1,4 +1,3 @@
-// models/Cart.js
 import mongoose from 'mongoose';
 
 const cartItemSchema = new mongoose.Schema({
@@ -21,7 +20,11 @@ const cartSchema = new mongoose.Schema({
     required: true,
     unique: true  // One cart per user
   },
-  sessionId: { type: String, default: null },
+  sessionId: { 
+    type: String, 
+    default: null,
+    sparse: true  // Allow multiple nulls but keep uniqueness for non-null values
+  },
   items: [cartItemSchema],
   specialInstructions: { type: Map, of: String, default: {} },
   orderType: { type: String, default: 'dine-in' },
@@ -34,8 +37,11 @@ const cartSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
-// Index for faster queries
-cartSchema.index({ userId: 1 });
+// Drop the old unique index on sessionId if it exists
+// This needs to be run once manually or handled in code
+cartSchema.index({ userId: 1 }, { unique: true });
+// Remove the unique constraint from sessionId
+cartSchema.index({ sessionId: 1 }, { sparse: true });
 
 const Cart = mongoose.models.Cart || mongoose.model('Cart', cartSchema);
 
