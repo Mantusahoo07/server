@@ -1,15 +1,22 @@
+// routes/cart.js
 import express from 'express';
 import Cart from '../models/Cart.js';
+import { authenticate } from '../middleware/auth.js';
 
 const router = express.Router();
 
-// Get or create cart for session
-router.get('/:sessionId', async (req, res) => {
+// Get user's cart (authenticated)
+router.get('/', authenticate, async (req, res) => {
   try {
-    let cart = await Cart.findOne({ sessionId: req.params.sessionId });
+    let cart = await Cart.findOne({ userId: req.userId });
     
     if (!cart) {
-      cart = new Cart({ sessionId: req.params.sessionId });
+      // Create empty cart for user
+      cart = new Cart({ 
+        userId: req.userId,
+        items: [],
+        specialInstructions: {}
+      });
       await cart.save();
     }
     
@@ -20,15 +27,15 @@ router.get('/:sessionId', async (req, res) => {
   }
 });
 
-// Save cart
-router.post('/:sessionId', async (req, res) => {
+// Save entire cart
+router.post('/', authenticate, async (req, res) => {
   try {
     const { items, specialInstructions, orderType, deliveryPlatform, deliveryAddress, customerName, customerPhone, tableNumber } = req.body;
     
-    let cart = await Cart.findOne({ sessionId: req.params.sessionId });
+    let cart = await Cart.findOne({ userId: req.userId });
     
     if (!cart) {
-      cart = new Cart({ sessionId: req.params.sessionId });
+      cart = new Cart({ userId: req.userId });
     }
     
     cart.items = items || [];
@@ -50,20 +57,35 @@ router.post('/:sessionId', async (req, res) => {
 });
 
 // Add item to cart
-router.post('/:sessionId/items', async (req, res) => {
+router.post('/items', authenticate, async (req, res) => {
   try {
     const { item } = req.body;
-    let cart = await Cart.findOne({ sessionId: req.params.sessionId });
+    
+    if (!item || !item.id) {
+      return res.status(400).json({ error: 'Item ID is required' });
+    }
+    
+    let cart = await Cart.findOne({ userId: req.userId });
     
     if (!cart) {
-      cart = new Cart({ sessionId: req.params.sessionId });
+      cart = new Cart({ userId: req.userId, items: [] });
     }
     
     const existingItem = cart.items.find(i => i.id === item.id);
     if (existingItem) {
-      existingItem.quantity += item.quantity;
+      existingItem.quantity += (item.quantity || 1);
     } else {
-      cart.items.push(item);
+      cart.items.push({
+        id: item.id,
+        name: item.name,
+        fullName: item.fullName || item.name,
+        price: item.price,
+        quantity: item.quantity || 1,
+        categoryId: item.categoryId,
+        categoryName: item.categoryName,
+        categorySortOrder: item.categorySortOrder || 0,
+        prepTime: item.prepTime || 10
+      });
     }
     
     cart.lastUpdated = new Date();
@@ -77,10 +99,10 @@ router.post('/:sessionId/items', async (req, res) => {
 });
 
 // Update item quantity
-router.patch('/:sessionId/items/:itemId', async (req, res) => {
+router.patch('/items/:itemId', authenticate, async (req, res) => {
   try {
     const { quantity } = req.body;
-    let cart = await Cart.findOne({ sessionId: req.params.sessionId });
+    const cart = await Cart.findOne({ userId: req.userId });
     
     if (!cart) {
       return res.status(404).json({ error: 'Cart not found' });
@@ -106,9 +128,9 @@ router.patch('/:sessionId/items/:itemId', async (req, res) => {
 });
 
 // Remove item from cart
-router.delete('/:sessionId/items/:itemId', async (req, res) => {
+router.delete('/items/:itemId', authenticate, async (req, res) => {
   try {
-    let cart = await Cart.findOne({ sessionId: req.params.sessionId });
+    const cart = await Cart.findOne({ userId: req.userId });
     
     if (!cart) {
       return res.status(404).json({ error: 'Cart not found' });
@@ -126,10 +148,24 @@ router.delete('/:sessionId/items/:itemId', async (req, res) => {
 });
 
 // Clear cart
-router.delete('/:sessionId', async (req, res) => {
+router.delete('/clear', authenticate, async (req, res) => {
   try {
-    await Cart.findOneAndDelete({ sessionId: req.params.sessionId });
-    res.json({ message: 'Cart cleared' });
+    const cart = await Cart.findOne({ userId: req.userId });
+    
+    if (cart) {
+      cart.items = [];
+      cart.specialInstructions = {};
+      cart.orderType = 'dine-in';
+      cart.deliveryPlatform = null;
+      cart.deliveryAddress = '';
+      cart.customerName = '';
+      cart.customerPhone = '';
+      cart.tableNumber = null;
+      cart.lastUpdated = new Date();
+      await cart.save();
+    }
+    
+    res.json({ message: 'Cart cleared successfully' });
   } catch (error) {
     console.error('Error clearing cart:', error);
     res.status(500).json({ error: error.message });
