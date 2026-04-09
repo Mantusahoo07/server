@@ -19,6 +19,7 @@ import settingRoutes from './routes/settings.js';
 import cartRoutes from './routes/cart.js';
 import businessRoutes from './routes/business.js';
 import customerRoutes from './routes/customers.js';
+import receiptRoutes from './routes/receipts.js';
 import morgan from 'morgan';
 
 dotenv.config();
@@ -166,6 +167,7 @@ app.use('/api/cart', cartRoutes);
 app.use('/api/settings', settingRoutes);
 app.use('/api/business', businessRoutes);
 app.use('/api/customers', customerRoutes);
+app.use('/api/receipts', receiptRoutes);
 
 // Root endpoint
 app.get('/', (req, res) => {
