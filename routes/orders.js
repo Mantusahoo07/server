@@ -153,19 +153,25 @@ router.post('/', authenticate, async (req, res) => {
     const displayOrderNumber = runningNumber === 0 ? `${baseOrderNumber}` : `${baseOrderNumber}-${runningNumber}`;
     
     // Create order
-    const order = new Order({
-      ...orderData,
-      baseOrderNumber,
-      runningNumber,
-      displayOrderNumber,
-      tableSessionId,
-      isAdditionalOrder,
-      isRunningOrder: runningNumber > 0,
-      createdBy: req.userId,
-      timerStart: new Date(),
-      createdAt: new Date(),
-      updatedAt: new Date()
-    });
+    // Create order
+const order = new Order({
+  ...orderData,
+  baseOrderNumber,
+  runningNumber,
+  displayOrderNumber,
+  tableSessionId,
+  isAdditionalOrder,
+  isRunningOrder: runningNumber > 0,
+  createdBy: req.userId,
+  timerStart: new Date(),
+  createdAt: new Date(),
+  updatedAt: new Date(),
+  taxRate: orderData.taxRate || 0,  // Force taxRate to 0 if not provided
+  tax: orderData.tax || 0,           // Force tax to 0 if not provided
+});
+
+console.log('📦 Order taxRate before save:', order.taxRate);
+console.log('📦 Order tax before save:', order.tax);
     
     const savedOrder = await order.save();
     console.log(`✅ Order saved: ${displayOrderNumber} (ID: ${savedOrder._id})`);
