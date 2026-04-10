@@ -1,22 +1,33 @@
 import express from 'express';
 import Receipt from '../models/Receipt.js';
+import { authenticate } from '../middleware/auth.js';
 
 const router = express.Router();
 
-// Save receipt
-router.post('/save', async (req, res) => {
+// Save receipt (authenticated)
+router.post('/', authenticate, async (req, res) => {
   try {
-    const { receiptId, orderId, orderNumber, displayOrderNumber, receiptData } = req.body;
+    const { receiptId, orderId, orderNumber, receiptData } = req.body;
     
-    const receipt = new Receipt({
-      receiptId,
-      orderId,
-      orderNumber,
-      displayOrderNumber,
-      receiptData
-    });
+    // Check if receipt already exists
+    let receipt = await Receipt.findOne({ receiptId });
     
-    await receipt.save();
+    if (receipt) {
+      // Update existing
+      receipt.receiptData = receiptData;
+      await receipt.save();
+    } else {
+      // Create new
+      receipt = new Receipt({
+        receiptId,
+        orderId,
+        orderNumber,
+        receiptData
+      });
+      await receipt.save();
+    }
+    
+    console.log(`Receipt saved: ${receiptId}`);
     res.json({ success: true, receiptId });
   } catch (error) {
     console.error('Error saving receipt:', error);
@@ -24,7 +35,7 @@ router.post('/save', async (req, res) => {
   }
 });
 
-// Get receipt by ID
+// Get receipt by ID (public - no auth needed for viewing)
 router.get('/:receiptId', async (req, res) => {
   try {
     const receipt = await Receipt.findOne({ receiptId: req.params.receiptId });
