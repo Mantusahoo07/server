@@ -112,7 +112,7 @@ orderSchema.pre('save', function(next) {
   if (this.items && this.items.length > 0) {
     this.subtotal = this.items.reduce((sum, i) => sum + (i.price * i.quantity), 0);
     
-    // Use existing taxRate, don't default to anything else
+    // Use the taxRate from the order (which comes from settings)
     const currentTaxRate = this.taxRate || 0;
     this.tax = this.subtotal * (currentTaxRate / 100);
     
@@ -120,6 +120,8 @@ orderSchema.pre('save', function(next) {
     this.serviceCharge = this.subtotal * (currentServiceChargeRate / 100);
     
     this.total = this.subtotal + this.tax + this.serviceCharge;
+    
+    console.log(`📊 Order totals recalculated: subtotal=${this.subtotal}, taxRate=${currentTaxRate}, tax=${this.tax}, total=${this.total}`);
   } else {
     this.subtotal = 0;
     this.tax = 0;
