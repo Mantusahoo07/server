@@ -7,8 +7,7 @@ const receiptSchema = new mongoose.Schema({
     unique: true
   },
   orderId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Order',
+    type: String,  // Changed from ObjectId to String to accept table billing IDs
     required: true
   },
   orderNumber: {
