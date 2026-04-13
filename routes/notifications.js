@@ -2,11 +2,11 @@
 
 import express from 'express';
 import webpush from 'web-push';
-import { authenticate, authorize } from '../middleware/auth.js';
+import { authenticate } from '../middleware/auth.js';
 
 const router = express.Router();
 
-// Store subscriptions with user info (in memory - use database in production)
+// Store subscriptions with user info
 let subscriptions = new Map(); // userId -> { subscription, userRole, username }
 let roleSubscriptions = new Map(); // role -> Set of userIds
 
@@ -19,7 +19,7 @@ router.get('/vapid-public-key', (req, res) => {
   res.json({ publicKey });
 });
 
-// Subscribe to notifications with user role (any authenticated user)
+// Subscribe to notifications (any authenticated user)
 router.post('/subscribe', authenticate, async (req, res) => {
   try {
     const subscription = req.body;
@@ -46,30 +46,32 @@ router.post('/subscribe', authenticate, async (req, res) => {
     
     subscriptions.set(userId.toString(), userInfo);
     
-    // Add to role-based subscriptions
-    if (!roleSubscriptions.has(user.role)) {
-      roleSubscriptions.set(user.role, new Set());
-    }
-    roleSubscriptions.get(user.role).add(userId.toString());
-    
-    console.log(`✅ User ${user.username} (${user.role}) subscribed to notifications`);
-    console.log(`📊 Total subscriptions: ${subscriptions.size}`);
-    console.log(`📊 Role subscriptions:`, Array.from(roleSubscriptions.keys()).map(r => `${r}: ${roleSubscriptions.get(r).size}`));
-    
-    // Send a welcome notification
-    const welcomePayload = JSON.stringify({
-      title: 'POS System',
-      body: `Notifications enabled for ${user.role} role!`,
-      icon: '/icon-192.png',
-      tag: 'welcome',
-      sound: '/sounds/new-dine-in.mp3'
-    });
-    
-    try {
-      await webpush.sendNotification(subscription, welcomePayload);
-      console.log('Welcome notification sent successfully');
-    } catch (err) {
-      console.error('Error sending welcome notification:', err);
+    // Add to role-based subscriptions (only for kitchen role)
+    // We only care about kitchen users for notifications
+    if (user.role === 'kitchen') {
+      if (!roleSubscriptions.has('kitchen')) {
+        roleSubscriptions.set('kitchen', new Set());
+      }
+      roleSubscriptions.get('kitchen').add(userId.toString());
+      console.log(`✅ Kitchen user ${user.username} subscribed to notifications`);
+      
+      // Send a welcome notification to kitchen users only
+      const welcomePayload = JSON.stringify({
+        title: 'Kitchen Notifications Active',
+        body: 'You will now receive real-time order updates!',
+        icon: '/icon-192.png',
+        tag: 'kitchen-welcome',
+        sound: '/sounds/new-dine-in.mp3'
+      });
+      
+      try {
+        await webpush.sendNotification(subscription, welcomePayload);
+        console.log('Welcome notification sent to kitchen user');
+      } catch (err) {
+        console.error('Error sending welcome notification:', err);
+      }
+    } else {
+      console.log(`User ${user.username} (${user.role}) - Not a kitchen user, no notifications will be sent`);
     }
     
     res.json({ success: true, message: 'Subscribed successfully', role: user.role });
@@ -86,17 +88,19 @@ router.post('/unsubscribe', authenticate, async (req, res) => {
     const userInfo = subscriptions.get(userId.toString());
     
     if (userInfo) {
-      // Remove from role subscriptions
-      const roleSet = roleSubscriptions.get(userInfo.userRole);
-      if (roleSet) {
-        roleSet.delete(userId.toString());
-        if (roleSet.size === 0) {
-          roleSubscriptions.delete(userInfo.userRole);
+      // Remove from kitchen role subscriptions if they were a kitchen user
+      if (userInfo.userRole === 'kitchen') {
+        const kitchenSet = roleSubscriptions.get('kitchen');
+        if (kitchenSet) {
+          kitchenSet.delete(userId.toString());
+          if (kitchenSet.size === 0) {
+            roleSubscriptions.delete('kitchen');
+          }
         }
       }
       
       subscriptions.delete(userId.toString());
-      console.log(`❌ User ${userId} (${userInfo.userRole}) unsubscribed from notifications`);
+      console.log(`❌ User ${userId} unsubscribed from notifications`);
     }
     
     res.json({ success: true, message: 'Unsubscribed successfully' });
@@ -106,192 +110,49 @@ router.post('/unsubscribe', authenticate, async (req, res) => {
   }
 });
 
-// Send test notification (any authenticated user can test their own subscription)
-router.post('/test', authenticate, async (req, res) => {
-  try {
-    const { title, body, sound } = req.body;
-    const userId = req.userId;
-    
-    const userInfo = subscriptions.get(userId.toString());
-    if (!userInfo) {
-      return res.status(404).json({ error: 'No subscription found for this user' });
-    }
-    
-    const payload = JSON.stringify({
-      title: title || 'Test Notification',
-      body: body || 'This is a test notification from your POS System!',
-      icon: '/icon-192.png',
-      tag: 'test',
-      sound: sound ? (sound.includes('/') ? sound : `/sounds/${sound}.mp3`) : '/sounds/new-dine-in.mp3',
-      data: { url: '/' },
-      vibrate: [200]
-    });
-    
-    await webpush.sendNotification(userInfo.subscription, payload);
-    
-    res.json({ success: true, message: 'Test notification sent' });
-  } catch (error) {
-    console.error('Error sending test notification:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Send notification to specific role (REMOVED admin/manager restriction so kitchen can receive)
-// Anyone can send to a role, but the server validates the role exists
-router.post('/send-to-role', authenticate, async (req, res) => {
-  try {
-    const { role, title, body, sound, url, orderId, ...extraData } = req.body;
-    const roleSet = roleSubscriptions.get(role);
-    
-    console.log(`📨 Sending to role: ${role}, subscribers: ${roleSet?.size || 0}`);
-    console.log(`📨 Title: ${title}`);
-    console.log(`📨 Sound: ${sound}`);
-    
-    if (!roleSet || roleSet.size === 0) {
-      console.log(`No subscribers found for role: ${role}`);
-      return res.json({ success: true, message: `No subscribers for role ${role}`, count: 0 });
-    }
-    
-    // Ensure sound path is correct
-    let soundPath = '/sounds/new-dine-in.mp3';
-    if (sound) {
-      if (sound.includes('/sounds/')) {
-        soundPath = sound;
-      } else if (sound.includes('.mp3')) {
-        soundPath = `/sounds/${sound}`;
-      } else {
-        soundPath = `/sounds/${sound}.mp3`;
-      }
-    }
-    
-    console.log(`📨 Sound path: ${soundPath}`);
-    
-    const payload = JSON.stringify({
-      title: title || `Notification for ${role}`,
-      body: body || 'You have a new notification',
-      icon: '/icon-192.png',
-      badge: '/icon-96.png',
-      tag: `role-${role}-${Date.now()}`,
-      sound: soundPath,
-      data: { url: url || '/', orderId, role, ...extraData },
-      vibrate: [500, 200, 500]
-    });
-    
-    let successCount = 0;
-    let failCount = 0;
-    
-    for (const userId of roleSet) {
-      const userInfo = subscriptions.get(userId);
-      if (userInfo && userInfo.subscription) {
-        try {
-          await webpush.sendNotification(userInfo.subscription, payload);
-          successCount++;
-          console.log(`✅ Notification sent to ${userInfo.username} (${userId})`);
-        } catch (error) {
-          console.error(`Failed to send to user ${userId}:`, error.message);
-          failCount++;
-          if (error.statusCode === 410) {
-            console.log(`Subscription expired for user ${userId}, removing`);
-            subscriptions.delete(userId);
-            roleSet.delete(userId);
-          }
-        }
-      }
-    }
-    
-    console.log(`📊 Sent to ${role} role: ${successCount} success, ${failCount} failed`);
-    res.json({ success: true, sent: successCount, failed: failCount, role });
-    
-  } catch (error) {
-    console.error('Error sending role notification:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Send notification to specific user (admin/manager only for privacy)
-router.post('/send-to-user', authenticate, authorize('admin', 'manager'), async (req, res) => {
-  try {
-    const { userId, title, body, sound, url, orderId, ...extraData } = req.body;
-    const userInfo = subscriptions.get(userId.toString());
-    
-    if (!userInfo) {
-      return res.status(404).json({ error: 'User not subscribed' });
-    }
-    
-    const soundPath = sound ? (sound.includes('/') ? sound : `/sounds/${sound}.mp3`) : '/sounds/new-order.mp3';
-    
-    const payload = JSON.stringify({
-      title: title || 'POS System Notification',
-      body: body || 'You have a new notification',
-      icon: '/icon-192.png',
-      badge: '/icon-96.png',
-      tag: `user-${userId}-${Date.now()}`,
-      sound: soundPath,
-      data: { url: url || '/', orderId, ...extraData },
-      vibrate: [200, 100, 200]
-    });
-    
-    await webpush.sendNotification(userInfo.subscription, payload);
-    res.json({ success: true, message: 'Notification sent to user' });
-    
-  } catch (error) {
-    console.error('Error sending user notification:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Get subscription stats (admin only)
-router.get('/stats', authenticate, authorize('admin'), async (req, res) => {
-  try {
-    const stats = {
-      totalSubscriptions: subscriptions.size,
-      byRole: {}
-    };
-    
-    for (const [role, users] of roleSubscriptions) {
-      stats.byRole[role] = users.size;
-    }
-    
-    const users = [];
-    for (const [userId, info] of subscriptions) {
-      users.push({
-        userId,
-        username: info.username,
-        role: info.userRole,
-        subscribedAt: info.subscribedAt
-      });
-    }
-    
-    res.json({ stats, users });
-  } catch (error) {
-    console.error('Error getting stats:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Kitchen-specific notification helper
-const notifyKitchenRole = async (title, body, sound, orderId, extraData = {}) => {
-  const roleSet = roleSubscriptions.get('kitchen');
-  if (!roleSet || roleSet.size === 0) {
+// Send notification to kitchen staff ONLY
+const notifyKitchenStaff = async (title, body, sound, orderId, extraData = {}) => {
+  const kitchenSubscribers = roleSubscriptions.get('kitchen');
+  
+  console.log(`📨 Kitchen subscribers count: ${kitchenSubscribers?.size || 0}`);
+  
+  if (!kitchenSubscribers || kitchenSubscribers.size === 0) {
     console.log('No kitchen staff subscribed to notifications');
     return { success: false, count: 0 };
   }
   
-  const soundPath = sound ? (sound.includes('/') ? sound : `/sounds/${sound}.mp3`) : '/sounds/new-order.mp3';
+  // Ensure sound path is correct
+  let soundPath = sound;
+  if (sound && !sound.includes('/sounds/')) {
+    soundPath = `/sounds/${sound}.mp3`;
+  } else if (!sound) {
+    soundPath = '/sounds/new-dine-in.mp3';
+  }
+  
+  console.log(`📨 Sending to kitchen: ${title}`);
+  console.log(`📨 Sound path: ${soundPath}`);
   
   const payload = JSON.stringify({
     title: title,
     body: body,
     icon: '/icon-192.png',
     badge: '/icon-96.png',
-    tag: `kitchen-${Date.now()}`,
+    tag: `kitchen-${orderId || Date.now()}`,
     sound: soundPath,
-    data: { url: '/kitchen', orderId, ...extraData },
-    vibrate: [500, 200, 500]
+    data: { 
+      url: '/kitchen', 
+      orderId, 
+      ...extraData 
+    },
+    vibrate: [500, 200, 500],
+    requireInteraction: true,
+    renotify: true
   });
   
   let successCount = 0;
-  for (const userId of roleSet) {
+  let failCount = 0;
+  
+  for (const userId of kitchenSubscribers) {
     const userInfo = subscriptions.get(userId);
     if (userInfo && userInfo.subscription) {
       try {
@@ -300,117 +161,77 @@ const notifyKitchenRole = async (title, body, sound, orderId, extraData = {}) =>
         console.log(`✅ Kitchen notification sent to ${userInfo.username}`);
       } catch (error) {
         console.error(`Failed to send to kitchen user ${userId}:`, error.message);
+        failCount++;
         if (error.statusCode === 410) {
+          // Subscription expired, remove it
+          console.log(`Removing expired subscription for ${userId}`);
           subscriptions.delete(userId);
-          roleSet.delete(userId);
+          kitchenSubscribers.delete(userId);
         }
       }
     }
   }
   
-  return { success: true, count: successCount };
+  console.log(`📊 Kitchen notifications: ${successCount} sent, ${failCount} failed`);
+  return { success: true, sent: successCount, failed: failCount };
 };
 
-// Helper functions for other routes
-const sendNotificationToUser = async (userId, payload) => {
-  const userInfo = subscriptions.get(userId.toString());
-  if (!userInfo) return false;
-  
-  try {
-    await webpush.sendNotification(userInfo.subscription, JSON.stringify(payload));
-    return true;
-  } catch (error) {
-    if (error.statusCode === 410) {
-      subscriptions.delete(userId.toString());
-      const roleSet = roleSubscriptions.get(userInfo.userRole);
-      if (roleSet) roleSet.delete(userId.toString());
-    }
-    return false;
-  }
-};
-
-const sendNotificationToRole = async (role, payload) => {
-  const roleSet = roleSubscriptions.get(role);
-  if (!roleSet || roleSet.size === 0) return { success: false, count: 0 };
-  
-  let successCount = 0;
-  for (const userId of roleSet) {
-    const userInfo = subscriptions.get(userId);
-    if (userInfo && userInfo.subscription) {
-      try {
-        await webpush.sendNotification(userInfo.subscription, JSON.stringify(payload));
-        successCount++;
-      } catch (error) {
-        console.error(`Failed to send to user ${userId}:`, error);
-        if (error.statusCode === 410) {
-          subscriptions.delete(userId);
-          roleSet.delete(userId);
-        }
-      }
-    }
-  }
-  return { success: true, count: successCount };
-};
-
-const sendNotificationToAll = async (payload) => {
-  const results = [];
-  for (const [userId, userInfo] of subscriptions) {
-    if (userInfo && userInfo.subscription) {
-      try {
-        await webpush.sendNotification(userInfo.subscription, JSON.stringify(payload));
-        results.push({ userId, success: true });
-      } catch (error) {
-        results.push({ userId, success: false, error: error.message });
-        if (error.statusCode === 410) {
-          subscriptions.delete(userId);
-          const roleSet = roleSubscriptions.get(userInfo.userRole);
-          if (roleSet) roleSet.delete(userId);
-        }
-      }
-    }
-  }
-  return results;
-};
-
-// Kitchen-specific notification helpers
-const notifyKitchenNewOrder = async (order) => {
+// Kitchen notification for new order
+export const notifyKitchenNewOrder = async (order) => {
   let soundFile = 'new-dine-in';
-  let title = '🍽️ New Order for Kitchen!';
-  let body = `Order #${order.displayOrderNumber || order.orderNumber}`;
+  let title = '';
+  let body = '';
   
-  if (order.orderType === 'dine-in') {
-    soundFile = 'new-dine-in';
-    title = '🍽️ New Dine-In Order for Kitchen!';
-    body = `Table ${order.tableNumber} - Order #${order.displayOrderNumber || order.orderNumber}`;
-  } else if (order.orderType === 'takeaway') {
-    soundFile = 'new-takeaway';
-    title = '📦 New Takeaway Order for Kitchen!';
-    body = `Order #${order.displayOrderNumber || order.orderNumber}`;
-  } else if (order.orderType === 'delivery') {
-    if (order.deliveryPlatform === 'zomato') {
-      soundFile = 'new-zomato';
-      title = '🛍️ New Zomato Order for Kitchen!';
-    } else if (order.deliveryPlatform === 'swiggy') {
-      soundFile = 'new-swiggy';
-      title = '🍔 New Swiggy Order for Kitchen!';
-    } else {
-      soundFile = 'new-delivery';
-      title = '🚚 New Delivery Order for Kitchen!';
-    }
-    body = `Order #${order.displayOrderNumber || order.orderNumber}`;
+  const orderNumber = order.displayOrderNumber || order.orderNumber;
+  
+  console.log(`📦 New order notification for kitchen: Type=${order.orderType}, Platform=${order.deliveryPlatform}`);
+  
+  switch (order.orderType) {
+    case 'dine-in':
+      soundFile = 'new-dine-in';
+      title = '🍽️ New Dine-In Order';
+      body = `Table ${order.tableNumber} - Order #${orderNumber}`;
+      break;
+      
+    case 'takeaway':
+      soundFile = 'new-takeaway';
+      title = '📦 New Takeaway Order';
+      body = `Order #${orderNumber}`;
+      break;
+      
+    case 'delivery':
+      if (order.deliveryPlatform === 'zomato') {
+        soundFile = 'new-zomato';
+        title = '🛍️ New Zomato Order';
+        body = `Order #${orderNumber}`;
+      } else if (order.deliveryPlatform === 'swiggy') {
+        soundFile = 'new-swiggy';
+        title = '🍔 New Swiggy Order';
+        body = `Order #${orderNumber}`;
+      } else {
+        soundFile = 'new-delivery';
+        title = '🚚 New Home Delivery Order';
+        body = `Order #${orderNumber}`;
+      }
+      break;
+      
+    default:
+      soundFile = 'new-dine-in';
+      title = '🍽️ New Order';
+      body = `Order #${orderNumber}`;
   }
   
-  console.log(`📨 Sending kitchen notification: ${title}`);
-  return await notifyKitchenRole(title, body, soundFile, order._id, {
+  return await notifyKitchenStaff(title, body, soundFile, order._id, {
     orderType: order.orderType,
     tableNumber: order.tableNumber,
     deliveryPlatform: order.deliveryPlatform
   });
 };
 
-const notifyKitchenOrderModified = async (order, isRunningOrder = false) => {
+// Kitchen notification for order modification
+export const notifyKitchenOrderModified = async (order, isRunningOrder = false) => {
   const soundFile = 'order-modified';
-  let title = '✏️ Order Modified - Kitchen';
+  let title = '✏️ Order Modified';
   let body = `Order #${order.displayOrderNumber || order.orderNumber}`;
   
   if (order.tableNumber) {
@@ -418,98 +239,89 @@ const notifyKitchenOrderModified = async (order, isRunningOrder = false) => {
   }
   
   if (isRunningOrder) {
-    title = '🔄 Running Order Modified - Kitchen!';
+    title = '🔄 Running Order Modified';
     body = `Table ${order.tableNumber} - Running Order #${order.displayOrderNumber || order.orderNumber}`;
   }
   
-  return await notifyKitchenRole(title, body, soundFile, order._id, { isRunningOrder });
+  return await notifyKitchenStaff(title, body, soundFile, order._id, { isRunningOrder });
 };
 
-const notifyKitchenInstantOrder = async (order) => {
-  return await notifyKitchenRole(
-    '⚡ INSTANT ORDER FOR KITCHEN!',
-    `Order #${order.displayOrderNumber || order.orderNumber} needs immediate attention`,
-    'instant-order',
-    order._id,
-    { urgent: true }
-  );
+// Kitchen notification for instant order
+export const notifyKitchenInstantOrder = async (order) => {
+  const soundFile = 'instant-order';
+  const title = '⚡ INSTANT ORDER REQUIRED!';
+  const body = `Order #${order.displayOrderNumber || order.orderNumber} needs immediate attention`;
+  
+  return await notifyKitchenStaff(title, body, soundFile, order._id, { urgent: true });
 };
 
-const notifyKitchenItemReady = async (orderId, itemName, orderNumber) => {
-  return await notifyKitchenRole(
-    '✓ Item Ready - Kitchen',
-    `${itemName} is ready for Order #${orderNumber}`,
-    'order-ready',
-    orderId,
-    { itemName }
-  );
+// Kitchen notification for order ready (for billing)
+export const notifyOrderReady = async (order) => {
+  const soundFile = 'order-ready';
+  const title = '💰 Order Ready for Billing';
+  const body = `Order #${order.displayOrderNumber || order.orderNumber} is ready for payment`;
+  
+  // This might be useful for POS users too, but we'll keep it kitchen-only
+  return await notifyKitchenStaff(title, body, soundFile, order._id);
 };
 
-// General notification helpers (send to all)
-const notifyNewOrder = async (order) => {
-  const payload = {
-    title: '🔔 New Order Received!',
-    body: `Order #${order.displayOrderNumber || order.orderNumber} - ${order.items.length} items`,
-    icon: '/icon-192.png',
-    tag: `new-order-${order._id}`,
-    data: { url: '/kitchen', orderId: order._id },
-    vibrate: [500, 200, 500],
-    sound: '/sounds/new-order.mp3'
-  };
-  return await sendNotificationToAll(payload);
+// Kitchen notification for cancellation request
+export const notifyCancellationRequest = async (order, item) => {
+  const soundFile = 'cancellation-request';
+  const title = '❌ Cancellation Requested';
+  const body = `${item.name} from Order #${order.displayOrderNumber || order.orderNumber} needs approval`;
+  
+  return await notifyKitchenStaff(title, body, soundFile, order._id, { itemName: item.name });
 };
 
-const notifyOrderReady = async (order) => {
-  const payload = {
-    title: '💰 Order Ready for Billing!',
-    body: `Order #${order.displayOrderNumber || order.orderNumber} is ready for payment`,
-    icon: '/icon-192.png',
-    tag: `order-ready-${order._id}`,
-    data: { url: '/orders', orderId: order._id },
-    vibrate: [200, 100, 200],
-    sound: '/sounds/order-ready.mp3'
-  };
-  return await sendNotificationToAll(payload);
-};
+// Get kitchen subscription stats (for debugging)
+router.get('/stats', authenticate, async (req, res) => {
+  try {
+    const kitchenSubscribers = roleSubscriptions.get('kitchen') || new Set();
+    const subscribers = [];
+    
+    for (const userId of kitchenSubscribers) {
+      const info = subscriptions.get(userId);
+      if (info) {
+        subscribers.push({
+          userId,
+          username: info.username,
+          role: info.userRole,
+          subscribedAt: info.subscribedAt
+        });
+      }
+    }
+    
+    res.json({
+      kitchenSubscribersCount: kitchenSubscribers.size,
+      subscribers: subscribers
+    });
+  } catch (error) {
+    console.error('Error getting stats:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
 
-const notifyCancellationRequest = async (order, item) => {
-  const payload = {
-    title: '❌ Cancellation Requested',
-    body: `${item.name} from Order #${order.displayOrderNumber || order.orderNumber} needs approval`,
-    icon: '/icon-192.png',
-    tag: `cancellation-${order._id}`,
-    data: { url: '/orders', orderId: order._id },
-    vibrate: [300, 100, 300],
-    sound: '/sounds/cancellation-request.mp3'
-  };
-  return await sendNotificationToAll(payload);
-};
-
-const notifyInstantOrder = async (order) => {
-  const payload = {
-    title: '⚡ INSTANT ORDER REQUIRED!',
-    body: `Order #${order.displayOrderNumber || order.orderNumber} needs immediate attention`,
-    icon: '/icon-192.png',
-    tag: `instant-order-${order._id}`,
-    data: { url: '/kitchen', orderId: order._id },
-    vibrate: [500, 200, 500, 200, 500],
-    sound: '/sounds/instant-order.mp3'
-  };
-  return await sendNotificationToAll(payload);
-};
+// Test endpoint to send a test notification to kitchen (for debugging)
+router.post('/test-kitchen', authenticate, async (req, res) => {
+  try {
+    const result = await notifyKitchenStaff(
+      'Test Kitchen Notification',
+      'This is a test notification for kitchen staff',
+      'new-dine-in',
+      null,
+      { test: true }
+    );
+    
+    res.json({ 
+      success: true, 
+      message: `Test notification sent to ${result.sent} kitchen staff`,
+      result 
+    });
+  } catch (error) {
+    console.error('Error sending test notification:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
 
 export default router;
-export {
-  sendNotificationToUser,
-  sendNotificationToRole,
-  sendNotificationToAll,
-  notifyNewOrder,
-  notifyOrderReady,
-  notifyCancellationRequest,
-  notifyInstantOrder,
-  notifyKitchenNewOrder,
-  notifyKitchenOrderModified,
-  notifyKitchenInstantOrder,
-  notifyKitchenItemReady,
-  notifyKitchenRole
-};
