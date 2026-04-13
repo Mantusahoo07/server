@@ -6,6 +6,7 @@ import helmet from 'helmet';
 import compression from 'compression';
 import dotenv from 'dotenv';
 import mongoose from 'mongoose';
+import webpush from 'web-push';
 import connectDB from './config/database.js';
 import { setupSocketHandlers, getIO } from './socket.js';
 import authRoutes from './routes/auth.js';
@@ -20,6 +21,7 @@ import cartRoutes from './routes/cart.js';
 import businessRoutes from './routes/business.js';
 import customerRoutes from './routes/customers.js';
 import receiptRoutes from './routes/receipts.js';
+import notificationRoutes from './routes/notifications.js';
 import morgan from 'morgan';
 
 dotenv.config();
@@ -36,6 +38,39 @@ if (missingEnvVars.length > 0) {
     process.exit(1);
   }
 }
+
+// Initialize Web Push for notifications
+const initializeWebPush = () => {
+  const publicKey = process.env.VAPID_PUBLIC_KEY;
+  const privateKey = process.env.VAPID_PRIVATE_KEY;
+  
+  if (!publicKey || !privateKey) {
+    console.log('⚠️ VAPID keys not found. Generating new keys...');
+    const vapidKeys = webpush.generateVAPIDKeys();
+    console.log('\n📢 PLEASE ADD THESE TO YOUR .env FILE:');
+    console.log(`VAPID_PUBLIC_KEY=${vapidKeys.publicKey}`);
+    console.log(`VAPID_PRIVATE_KEY=${vapidKeys.privateKey}\n`);
+    
+    // For development, we can still run without keys
+    if (process.env.NODE_ENV === 'production') {
+      console.error('❌ VAPID keys required for production!');
+    } else {
+      console.log('⚠️ Running without push notifications (add VAPID keys to enable)');
+    }
+    return false;
+  }
+  
+  webpush.setVapidDetails(
+    'mailto:admin@pos-system.com',
+    publicKey,
+    privateKey
+  );
+  console.log('✅ Web Push notifications initialized');
+  return true;
+};
+
+// Initialize web push
+const webPushInitialized = initializeWebPush();
 
 // Allowed origins
 const allowedOrigins = [
@@ -134,6 +169,13 @@ app.use((req, res, next) => {
   next();
 });
 
+// Make web push available to routes
+app.use((req, res, next) => {
+  req.webPushInitialized = webPushInitialized;
+  req.webpush = webpush;
+  next();
+});
+
 // Health check endpoint with detailed status
 app.get('/health', async (req, res) => {
   const dbState = mongoose.connection.readyState;
@@ -151,7 +193,8 @@ app.get('/health', async (req, res) => {
     mongodb: dbStatus,
     socketConnections: io?.sockets?.sockets?.size || 0,
     environment: process.env.NODE_ENV || 'development',
-    version: '1.0.0'
+    version: '1.0.0',
+    pushNotifications: webPushInitialized
   });
 });
 
@@ -168,6 +211,7 @@ app.use('/api/settings', settingRoutes);
 app.use('/api/business', businessRoutes);
 app.use('/api/customers', customerRoutes);
 app.use('/api/receipts', receiptRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 // Root endpoint
 app.get('/', (req, res) => {
@@ -186,7 +230,11 @@ app.get('/', (req, res) => {
       auth: '/api/auth',
       payments: '/api/payments',
       reports: '/api/reports',
-      cart: '/api/cart'
+      cart: '/api/cart',
+      notifications: '/api/notifications'
+    },
+    features: {
+      pushNotifications: webPushInitialized
     },
     timestamp: new Date()
   });
@@ -266,10 +314,11 @@ process.on('uncaughtException', (error) => {
 const PORT = process.env.PORT || 3001;
 httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`🌍 Environment: process.env.NODE_ENV || 'development'`);
+  console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`🔌 Socket.io ready for connections`);
   console.log(`📡 API URL: http://localhost:${PORT}/api`);
   console.log(`✅ CORS enabled for:`, allowedOrigins);
+  console.log(`📢 Push notifications: ${webPushInitialized ? '✅ Enabled' : '⚠️ Disabled (add VAPID keys to .env)'}`);
 });
 
 export { app, httpServer, io, getIO };
