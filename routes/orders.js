@@ -2,6 +2,13 @@ import express from 'express';
 import Order from '../models/Order.js';
 import Table from '../models/Table.js';
 import { authenticate } from '../middleware/auth.js';
+import { 
+  notifyKitchenNewOrder, 
+  notifyKitchenOrderModified, 
+  notifyKitchenInstantOrder,
+  notifyOrderReady,
+  notifyCancellationRequest
+} from './notifications.js';
 
 const router = express.Router();
 
@@ -153,25 +160,24 @@ router.post('/', authenticate, async (req, res) => {
     const displayOrderNumber = runningNumber === 0 ? `${baseOrderNumber}` : `${baseOrderNumber}-${runningNumber}`;
     
     // Create order
-    // Create order
-const order = new Order({
-  ...orderData,
-  baseOrderNumber,
-  runningNumber,
-  displayOrderNumber,
-  tableSessionId,
-  isAdditionalOrder,
-  isRunningOrder: runningNumber > 0,
-  createdBy: req.userId,
-  timerStart: new Date(),
-  createdAt: new Date(),
-  updatedAt: new Date(),
-  taxRate: orderData.taxRate || 0,  // Force taxRate to 0 if not provided
-  tax: orderData.tax || 0,           // Force tax to 0 if not provided
-});
+    const order = new Order({
+      ...orderData,
+      baseOrderNumber,
+      runningNumber,
+      displayOrderNumber,
+      tableSessionId,
+      isAdditionalOrder,
+      isRunningOrder: runningNumber > 0,
+      createdBy: req.userId,
+      timerStart: new Date(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      taxRate: orderData.taxRate || 0,
+      tax: orderData.tax || 0,
+    });
 
-console.log('📦 Order taxRate before save:', order.taxRate);
-console.log('📦 Order tax before save:', order.tax);
+    console.log('📦 Order taxRate before save:', order.taxRate);
+    console.log('📦 Order tax before save:', order.tax);
     
     const savedOrder = await order.save();
     console.log(`✅ Order saved: ${displayOrderNumber} (ID: ${savedOrder._id})`);
@@ -193,6 +199,9 @@ console.log('📦 Order tax before save:', order.tax);
       io.emit('new-order', savedOrder);
       io.emit('order-updated', savedOrder);
       io.emit('new-order-received', savedOrder);
+      
+      // Send push notification to kitchen staff
+      await notifyKitchenNewOrder(savedOrder);
       
       if (orderData.orderType === 'dine-in' && orderData.tableNumber) {
         const updatedTable = await Table.findOne({ tableNumber: orderData.tableNumber });
@@ -265,6 +274,18 @@ router.post('/:id/items', authenticate, async (req, res) => {
     if (io) {
       io.emit('order-updated', order);
       io.emit('order-item-added', { orderId: order._id, item: newItem });
+      io.emit('order-modified', {
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        displayOrderNumber: order.displayOrderNumber,
+        tableNumber: order.tableNumber,
+        isRunningOrder: order.isRunningOrder,
+        itemId: newItem.id,
+        newQuantity: newItem.quantity
+      });
+      
+      // Send push notification to kitchen staff about modification
+      await notifyKitchenOrderModified(order, order.isRunningOrder);
     }
     
     res.json(order);
@@ -282,6 +303,8 @@ router.delete('/:id/items/:itemId', authenticate, async (req, res) => {
       return res.status(404).json({ error: 'Order not found' });
     }
     
+    const removedItem = order.items.find(i => i.id === req.params.itemId);
+    
     order.items = order.items.filter(i => i.id !== req.params.itemId);
     
     // Update totals
@@ -298,6 +321,17 @@ router.delete('/:id/items/:itemId', authenticate, async (req, res) => {
     if (io) {
       io.emit('order-updated', order);
       io.emit('order-item-removed', { orderId: order._id, itemId: req.params.itemId });
+      io.emit('order-modified', {
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        displayOrderNumber: order.displayOrderNumber,
+        tableNumber: order.tableNumber,
+        isRunningOrder: order.isRunningOrder,
+        removedItem: removedItem?.name
+      });
+      
+      // Send push notification to kitchen staff about modification
+      await notifyKitchenOrderModified(order, order.isRunningOrder);
     }
     
     res.json(order);
@@ -341,6 +375,25 @@ router.patch('/:id/items/:itemId', authenticate, async (req, res) => {
     const io = req.app.get('io');
     if (io) {
       io.emit('order-updated', order);
+      io.emit('order-item-quantity-updated', { 
+        orderId: order._id, 
+        itemId: req.params.itemId, 
+        oldQuantity, 
+        newQuantity: quantity 
+      });
+      io.emit('order-modified', {
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        displayOrderNumber: order.displayOrderNumber,
+        tableNumber: order.tableNumber,
+        isRunningOrder: order.isRunningOrder,
+        itemId: req.params.itemId,
+        oldQuantity,
+        newQuantity: quantity
+      });
+      
+      // Send push notification to kitchen staff about modification
+      await notifyKitchenOrderModified(order, order.isRunningOrder);
     }
     
     res.json(order);
@@ -382,7 +435,11 @@ router.patch('/:id/status', authenticate, async (req, res) => {
     if (io) {
       io.emit('order-updated', order);
       if (status === 'accepted') io.emit('order-accepted', order._id);
-      if (status === 'ready_for_billing') io.emit('order-ready-for-billing', order._id);
+      if (status === 'ready_for_billing') {
+        io.emit('order-ready-for-billing', order._id);
+        // Send push notification for ready order
+        await notifyOrderReady(order);
+      }
       if (status === 'completed') io.emit('order-completed', order._id);
       
       if ((status === 'cancelled' || status === 'completed') && order.tableNumber) {
@@ -412,6 +469,7 @@ router.patch('/:id/items/:itemId/status', authenticate, async (req, res) => {
       return res.status(404).json({ error: 'Item not found' });
     }
     
+    const oldStatus = item.status;
     item.status = status;
     if (status === 'completed') {
       item.completedAt = new Date();
@@ -422,7 +480,12 @@ router.patch('/:id/items/:itemId/status', authenticate, async (req, res) => {
     const io = req.app.get('io');
     if (io) {
       io.emit('order-updated', order);
-      io.emit('item-status-updated', { orderId: order._id, itemId: req.params.itemId, status });
+      io.emit('item-status-updated', { orderId: order._id, itemId: req.params.itemId, status, oldStatus });
+      
+      // Send push notification when item is marked ready
+      if (status === 'completed' && oldStatus !== 'completed') {
+        await notifyKitchenOrderModified(order, order.isRunningOrder);
+      }
     }
     
     res.json(order);
@@ -628,6 +691,9 @@ router.post('/:id/items/:itemId/request-cancellation', authenticate, async (req,
         deliveryPlatform: order.deliveryPlatform,
         requestedAt: item.cancellationRequestedAt
       });
+      
+      // Send push notification for cancellation request
+      await notifyCancellationRequest(order, item);
     }
     
     res.json({ message: 'Cancellation request sent', item });
@@ -637,7 +703,6 @@ router.post('/:id/items/:itemId/request-cancellation', authenticate, async (req,
   }
 });
 
-// Approve cancellation (Admin/POS)
 // Approve cancellation (Admin/POS)
 router.post('/:id/items/:itemId/approve-cancellation', authenticate, async (req, res) => {
   try {
@@ -751,6 +816,7 @@ router.post('/:id/items/:itemId/reject-cancellation', authenticate, async (req, 
     res.status(500).json({ error: error.message });
   }
 });
+
 // Get all pending cancellation requests
 router.get('/cancellation-requests/pending', authenticate, async (req, res) => {
   try {
