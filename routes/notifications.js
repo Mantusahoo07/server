@@ -1,4 +1,5 @@
 // server-main/routes/notifications.js
+
 import express from 'express';
 import webpush from 'web-push';
 import { authenticate, authorize } from '../middleware/auth.js';
@@ -18,7 +19,7 @@ router.get('/vapid-public-key', (req, res) => {
   res.json({ publicKey });
 });
 
-// Subscribe to notifications with user role
+// Subscribe to notifications with user role (any authenticated user)
 router.post('/subscribe', authenticate, async (req, res) => {
   try {
     const subscription = req.body;
@@ -52,6 +53,8 @@ router.post('/subscribe', authenticate, async (req, res) => {
     roleSubscriptions.get(user.role).add(userId.toString());
     
     console.log(`✅ User ${user.username} (${user.role}) subscribed to notifications`);
+    console.log(`📊 Total subscriptions: ${subscriptions.size}`);
+    console.log(`📊 Role subscriptions:`, Array.from(roleSubscriptions.keys()).map(r => `${r}: ${roleSubscriptions.get(r).size}`));
     
     // Send a welcome notification
     const welcomePayload = JSON.stringify({
@@ -64,6 +67,7 @@ router.post('/subscribe', authenticate, async (req, res) => {
     
     try {
       await webpush.sendNotification(subscription, welcomePayload);
+      console.log('Welcome notification sent successfully');
     } catch (err) {
       console.error('Error sending welcome notification:', err);
     }
@@ -102,7 +106,7 @@ router.post('/unsubscribe', authenticate, async (req, res) => {
   }
 });
 
-// Send test notification
+// Send test notification (any authenticated user can test their own subscription)
 router.post('/test', authenticate, async (req, res) => {
   try {
     const { title, body, sound } = req.body;
@@ -118,7 +122,7 @@ router.post('/test', authenticate, async (req, res) => {
       body: body || 'This is a test notification from your POS System!',
       icon: '/icon-192.png',
       tag: 'test',
-      sound: sound ? `/sounds/${sound}.mp3` : '/sounds/new-dine-in.mp3',
+      sound: sound ? (sound.includes('/') ? sound : `/sounds/${sound}.mp3`) : '/sounds/new-dine-in.mp3',
       data: { url: '/' },
       vibrate: [200]
     });
@@ -132,16 +136,35 @@ router.post('/test', authenticate, async (req, res) => {
   }
 });
 
-// Send notification to specific role (kitchen, admin, cashier, etc.)
-router.post('/send-to-role', authenticate, authorize('admin', 'manager'), async (req, res) => {
+// Send notification to specific role (REMOVED admin/manager restriction so kitchen can receive)
+// Anyone can send to a role, but the server validates the role exists
+router.post('/send-to-role', authenticate, async (req, res) => {
   try {
     const { role, title, body, sound, url, orderId, ...extraData } = req.body;
     const roleSet = roleSubscriptions.get(role);
+    
+    console.log(`📨 Sending to role: ${role}, subscribers: ${roleSet?.size || 0}`);
+    console.log(`📨 Title: ${title}`);
+    console.log(`📨 Sound: ${sound}`);
     
     if (!roleSet || roleSet.size === 0) {
       console.log(`No subscribers found for role: ${role}`);
       return res.json({ success: true, message: `No subscribers for role ${role}`, count: 0 });
     }
+    
+    // Ensure sound path is correct
+    let soundPath = '/sounds/new-dine-in.mp3';
+    if (sound) {
+      if (sound.includes('/sounds/')) {
+        soundPath = sound;
+      } else if (sound.includes('.mp3')) {
+        soundPath = `/sounds/${sound}`;
+      } else {
+        soundPath = `/sounds/${sound}.mp3`;
+      }
+    }
+    
+    console.log(`📨 Sound path: ${soundPath}`);
     
     const payload = JSON.stringify({
       title: title || `Notification for ${role}`,
@@ -149,9 +172,9 @@ router.post('/send-to-role', authenticate, authorize('admin', 'manager'), async 
       icon: '/icon-192.png',
       badge: '/icon-96.png',
       tag: `role-${role}-${Date.now()}`,
-      sound: sound ? `/sounds/${sound}.mp3` : '/sounds/new-order.mp3',
+      sound: soundPath,
       data: { url: url || '/', orderId, role, ...extraData },
-      vibrate: [200, 100, 200]
+      vibrate: [500, 200, 500]
     });
     
     let successCount = 0;
@@ -163,10 +186,12 @@ router.post('/send-to-role', authenticate, authorize('admin', 'manager'), async 
         try {
           await webpush.sendNotification(userInfo.subscription, payload);
           successCount++;
+          console.log(`✅ Notification sent to ${userInfo.username} (${userId})`);
         } catch (error) {
-          console.error(`Failed to send to user ${userId}:`, error);
+          console.error(`Failed to send to user ${userId}:`, error.message);
           failCount++;
           if (error.statusCode === 410) {
+            console.log(`Subscription expired for user ${userId}, removing`);
             subscriptions.delete(userId);
             roleSet.delete(userId);
           }
@@ -174,7 +199,7 @@ router.post('/send-to-role', authenticate, authorize('admin', 'manager'), async 
       }
     }
     
-    console.log(`Sent to ${role} role: ${successCount} success, ${failCount} failed`);
+    console.log(`📊 Sent to ${role} role: ${successCount} success, ${failCount} failed`);
     res.json({ success: true, sent: successCount, failed: failCount, role });
     
   } catch (error) {
@@ -183,7 +208,7 @@ router.post('/send-to-role', authenticate, authorize('admin', 'manager'), async 
   }
 });
 
-// Send notification to specific user
+// Send notification to specific user (admin/manager only for privacy)
 router.post('/send-to-user', authenticate, authorize('admin', 'manager'), async (req, res) => {
   try {
     const { userId, title, body, sound, url, orderId, ...extraData } = req.body;
@@ -193,13 +218,15 @@ router.post('/send-to-user', authenticate, authorize('admin', 'manager'), async 
       return res.status(404).json({ error: 'User not subscribed' });
     }
     
+    const soundPath = sound ? (sound.includes('/') ? sound : `/sounds/${sound}.mp3`) : '/sounds/new-order.mp3';
+    
     const payload = JSON.stringify({
       title: title || 'POS System Notification',
       body: body || 'You have a new notification',
       icon: '/icon-192.png',
       badge: '/icon-96.png',
       tag: `user-${userId}-${Date.now()}`,
-      sound: sound ? `/sounds/${sound}.mp3` : '/sounds/new-order.mp3',
+      sound: soundPath,
       data: { url: url || '/', orderId, ...extraData },
       vibrate: [200, 100, 200]
     });
@@ -250,13 +277,15 @@ const notifyKitchenRole = async (title, body, sound, orderId, extraData = {}) =>
     return { success: false, count: 0 };
   }
   
+  const soundPath = sound ? (sound.includes('/') ? sound : `/sounds/${sound}.mp3`) : '/sounds/new-order.mp3';
+  
   const payload = JSON.stringify({
     title: title,
     body: body,
     icon: '/icon-192.png',
     badge: '/icon-96.png',
     tag: `kitchen-${Date.now()}`,
-    sound: sound ? `/sounds/${sound}.mp3` : '/sounds/new-order.mp3',
+    sound: soundPath,
     data: { url: '/kitchen', orderId, ...extraData },
     vibrate: [500, 200, 500]
   });
@@ -268,8 +297,9 @@ const notifyKitchenRole = async (title, body, sound, orderId, extraData = {}) =>
       try {
         await webpush.sendNotification(userInfo.subscription, payload);
         successCount++;
+        console.log(`✅ Kitchen notification sent to ${userInfo.username}`);
       } catch (error) {
-        console.error(`Failed to send to kitchen user ${userId}:`, error);
+        console.error(`Failed to send to kitchen user ${userId}:`, error.message);
         if (error.statusCode === 410) {
           subscriptions.delete(userId);
           roleSet.delete(userId);
@@ -370,6 +400,7 @@ const notifyKitchenNewOrder = async (order) => {
     body = `Order #${order.displayOrderNumber || order.orderNumber}`;
   }
   
+  console.log(`📨 Sending kitchen notification: ${title}`);
   return await notifyKitchenRole(title, body, soundFile, order._id, {
     orderType: order.orderType,
     tableNumber: order.tableNumber,
@@ -422,7 +453,8 @@ const notifyNewOrder = async (order) => {
     icon: '/icon-192.png',
     tag: `new-order-${order._id}`,
     data: { url: '/kitchen', orderId: order._id },
-    vibrate: [500, 200, 500]
+    vibrate: [500, 200, 500],
+    sound: '/sounds/new-order.mp3'
   };
   return await sendNotificationToAll(payload);
 };
@@ -434,7 +466,8 @@ const notifyOrderReady = async (order) => {
     icon: '/icon-192.png',
     tag: `order-ready-${order._id}`,
     data: { url: '/orders', orderId: order._id },
-    vibrate: [200, 100, 200]
+    vibrate: [200, 100, 200],
+    sound: '/sounds/order-ready.mp3'
   };
   return await sendNotificationToAll(payload);
 };
@@ -446,7 +479,8 @@ const notifyCancellationRequest = async (order, item) => {
     icon: '/icon-192.png',
     tag: `cancellation-${order._id}`,
     data: { url: '/orders', orderId: order._id },
-    vibrate: [300, 100, 300]
+    vibrate: [300, 100, 300],
+    sound: '/sounds/cancellation-request.mp3'
   };
   return await sendNotificationToAll(payload);
 };
@@ -458,7 +492,8 @@ const notifyInstantOrder = async (order) => {
     icon: '/icon-192.png',
     tag: `instant-order-${order._id}`,
     data: { url: '/kitchen', orderId: order._id },
-    vibrate: [500, 200, 500, 200, 500]
+    vibrate: [500, 200, 500, 200, 500],
+    sound: '/sounds/instant-order.mp3'
   };
   return await sendNotificationToAll(payload);
 };
