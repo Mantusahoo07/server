@@ -7,6 +7,76 @@ const generateToken = (userId) => {
   });
 };
 
+// Check if any users exist (first run check)
+export const checkFirstRun = async (req, res) => {
+  try {
+    const userCount = await User.countDocuments();
+    res.json({ 
+      isFirstRun: userCount === 0,
+      userCount 
+    });
+  } catch (error) {
+    console.error('Error checking first run:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Create first admin user (only works when no users exist)
+export const createFirstAdmin = async (req, res) => {
+  try {
+    const { username, email, password } = req.body;
+    
+    // Check if any users exist
+    const userCount = await User.countDocuments();
+    if (userCount > 0) {
+      return res.status(403).json({ error: 'Users already exist. Use regular login.' });
+    }
+    
+    // Validate inputs
+    if (!username || !email || !password) {
+      return res.status(400).json({ error: 'All fields are required' });
+    }
+    
+    if (password.length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    }
+    
+    // Check if username or email already exists (shouldn't happen but just in case)
+    const existingUser = await User.findOne({ $or: [{ email }, { username }] });
+    if (existingUser) {
+      return res.status(400).json({ error: 'User already exists' });
+    }
+    
+    // Create admin user
+    const admin = new User({
+      username: username.trim(),
+      email: email.trim().toLowerCase(),
+      password,
+      role: 'admin',
+      active: true
+    });
+    
+    await admin.save();
+    
+    const token = generateToken(admin._id);
+    
+    res.status(201).json({
+      token,
+      user: {
+        id: admin._id,
+        username: admin.username,
+        email: admin.email,
+        role: admin.role,
+        permissions: admin.permissions
+      },
+      isFirstAdmin: true
+    });
+  } catch (error) {
+    console.error('Error creating first admin:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
 export const register = async (req, res) => {
   try {
     const { username, email, password, role } = req.body;
