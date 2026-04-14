@@ -133,21 +133,29 @@ const notifyKitchenStaff = async (title, body, sound, orderId, extraData = {}) =
   
   console.log(`🔊 Sound path: ${soundPath}`);
   
-  const payload = JSON.stringify({
-    title: title,
-    body: body,
-    icon: '/icon-192.png',
-    badge: '/icon-96.png',
-    tag: `kitchen-${orderId || Date.now()}`,
-    sound: soundPath,
-    data: { 
-      url: '/kitchen', 
-      orderId, 
-      ...extraData 
-    },
-    vibrate: [500, 200, 500],
-    requireInteraction: true
-  });
+  // In your notification sending function, add urgency header
+const payload = JSON.stringify({
+  title: title,
+  body: body,
+  icon: '/icon-192.png',
+  badge: '/icon-96.png',
+  tag: `kitchen-${orderId || Date.now()}`,
+  sound: soundPath,
+  vibrate: [500, 200, 500],
+  data: { url: '/kitchen', orderId, ...extraData },
+  requireInteraction: true,
+  urgency: 'high',  // Add this for higher priority
+  priority: 10       // Add this for higher priority
+});
+
+// Add headers for better delivery
+const options = {
+  headers: {
+    'Content-Type': 'application/json',
+    'Urgency': 'high',
+    'Priority': '10'
+  }
+};
   
   let sent = 0;
   let failed = 0;
