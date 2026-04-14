@@ -7,10 +7,13 @@ const generateToken = (userId) => {
   });
 };
 
+// ============ NEW: First Admin Setup Functions ============
+
 // Check if any users exist (first run check)
 export const checkFirstRun = async (req, res) => {
   try {
     const userCount = await User.countDocuments();
+    console.log(`[FirstRunCheck] User count: ${userCount}`);
     res.json({ 
       isFirstRun: userCount === 0,
       userCount 
@@ -26,24 +29,30 @@ export const createFirstAdmin = async (req, res) => {
   try {
     const { username, email, password } = req.body;
     
+    console.log('[CreateFirstAdmin] Request received:', { username, email });
+    
     // Check if any users exist
     const userCount = await User.countDocuments();
     if (userCount > 0) {
+      console.log('[CreateFirstAdmin] Users already exist, count:', userCount);
       return res.status(403).json({ error: 'Users already exist. Use regular login.' });
     }
     
     // Validate inputs
     if (!username || !email || !password) {
+      console.log('[CreateFirstAdmin] Missing fields');
       return res.status(400).json({ error: 'All fields are required' });
     }
     
     if (password.length < 6) {
+      console.log('[CreateFirstAdmin] Password too short');
       return res.status(400).json({ error: 'Password must be at least 6 characters' });
     }
     
     // Check if username or email already exists (shouldn't happen but just in case)
     const existingUser = await User.findOne({ $or: [{ email }, { username }] });
     if (existingUser) {
+      console.log('[CreateFirstAdmin] User already exists:', existingUser.username);
       return res.status(400).json({ error: 'User already exists' });
     }
     
@@ -57,6 +66,7 @@ export const createFirstAdmin = async (req, res) => {
     });
     
     await admin.save();
+    console.log('[CreateFirstAdmin] Admin created successfully:', admin.username);
     
     const token = generateToken(admin._id);
     
@@ -76,6 +86,8 @@ export const createFirstAdmin = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
+
+// ============ Existing Functions ============
 
 export const register = async (req, res) => {
   try {
@@ -100,6 +112,7 @@ export const register = async (req, res) => {
       }
     });
   } catch (error) {
+    console.error('Error registering user:', error);
     res.status(500).json({ error: error.message });
   }
 };
@@ -108,17 +121,22 @@ export const login = async (req, res) => {
   try {
     const { username, password } = req.body;
     
+    console.log('[Login] Attempt for username:', username);
+    
     const user = await User.findOne({ username });
     if (!user) {
+      console.log('[Login] User not found:', username);
       return res.status(401).json({ error: 'Invalid credentials' });
     }
     
     const isPasswordValid = await user.comparePassword(password);
     if (!isPasswordValid) {
+      console.log('[Login] Invalid password for:', username);
       return res.status(401).json({ error: 'Invalid credentials' });
     }
     
     if (!user.active) {
+      console.log('[Login] Account disabled:', username);
       return res.status(401).json({ error: 'Account is disabled' });
     }
     
@@ -126,6 +144,8 @@ export const login = async (req, res) => {
     await user.save();
     
     const token = generateToken(user._id);
+    console.log('[Login] Success for:', username);
+    
     res.json({
       token,
       user: {
@@ -137,6 +157,7 @@ export const login = async (req, res) => {
       }
     });
   } catch (error) {
+    console.error('Login error:', error);
     res.status(500).json({ error: error.message });
   }
 };
@@ -145,6 +166,10 @@ export const changePassword = async (req, res) => {
   try {
     const { oldPassword, newPassword } = req.body;
     const user = await User.findById(req.userId);
+    
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
     
     const isValid = await user.comparePassword(oldPassword);
     if (!isValid) {
@@ -156,6 +181,7 @@ export const changePassword = async (req, res) => {
     
     res.json({ message: 'Password changed successfully' });
   } catch (error) {
+    console.error('Change password error:', error);
     res.status(500).json({ error: error.message });
   }
 };
@@ -163,8 +189,12 @@ export const changePassword = async (req, res) => {
 export const getCurrentUser = async (req, res) => {
   try {
     const user = await User.findById(req.userId).select('-password');
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
     res.json(user);
   } catch (error) {
+    console.error('Get current user error:', error);
     res.status(500).json({ error: error.message });
   }
 };
@@ -175,6 +205,7 @@ export const getAllUsers = async (req, res) => {
     const users = await User.find().select('-password');
     res.json(users);
   } catch (error) {
+    console.error('Get all users error:', error);
     res.status(500).json({ error: error.message });
   }
 };
@@ -189,7 +220,7 @@ export const updateUser = async (req, res) => {
     }
     
     // Prevent admin from changing their own role
-    if (req.userId === user._id && role && role !== user.role) {
+    if (req.userId === user._id.toString() && role && role !== user.role) {
       return res.status(400).json({ error: 'You cannot change your own role' });
     }
     
@@ -208,6 +239,7 @@ export const updateUser = async (req, res) => {
       }
     });
   } catch (error) {
+    console.error('Update user error:', error);
     res.status(500).json({ error: error.message });
   }
 };
@@ -221,13 +253,14 @@ export const deleteUser = async (req, res) => {
     }
     
     // Prevent admin from deleting themselves
-    if (req.userId === user._id) {
+    if (req.userId === user._id.toString()) {
       return res.status(400).json({ error: 'You cannot delete your own account' });
     }
     
     await user.deleteOne();
     res.json({ message: 'User deleted successfully' });
   } catch (error) {
+    console.error('Delete user error:', error);
     res.status(500).json({ error: error.message });
   }
 };
