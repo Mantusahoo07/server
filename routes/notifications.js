@@ -1,5 +1,3 @@
-// server-main/routes/notifications.js
-
 import express from 'express';
 import webpush from 'web-push';
 import { authenticate } from '../middleware/auth.js';
@@ -10,7 +8,7 @@ const router = express.Router();
 let subscriptions = new Map();
 let roleSubscriptions = new Map();
 
-// Get VAPID public key (for frontend)
+// Get VAPID public key
 router.get('/vapid-public-key', (req, res) => {
   const publicKey = process.env.VAPID_PUBLIC_KEY;
   console.log('🔑 VAPID public key requested, present:', !!publicKey);
@@ -48,7 +46,6 @@ router.post('/subscribe', authenticate, async (req, res) => {
     
     subscriptions.set(userId.toString(), userInfo);
     
-    // Add to role-based subscriptions
     if (user.role === 'kitchen') {
       if (!roleSubscriptions.has('kitchen')) {
         roleSubscriptions.set('kitchen', new Set());
@@ -57,7 +54,6 @@ router.post('/subscribe', authenticate, async (req, res) => {
       console.log(`✅ Kitchen user ${user.username} subscribed to notifications`);
       console.log(`📊 Total kitchen subscribers: ${roleSubscriptions.get('kitchen').size}`);
       
-      // Send a welcome notification
       const welcomePayload = JSON.stringify({
         title: '🔔 Kitchen Notifications Active',
         body: 'You will now receive real-time order updates!',
@@ -120,7 +116,6 @@ const notifyKitchenStaff = async (title, body, sound, orderId, extraData = {}) =
   
   if (!kitchenSubscribers || kitchenSubscribers.size === 0) {
     console.log('❌ No kitchen staff subscribed to notifications');
-    console.log('📊 Current role subscriptions:', Array.from(roleSubscriptions.keys()));
     return { success: false, sent: 0 };
   }
   
@@ -131,31 +126,29 @@ const notifyKitchenStaff = async (title, body, sound, orderId, extraData = {}) =
     soundPath = '/sounds/new-dine-in.mp3';
   }
   
-  console.log(`🔊 Sound path: ${soundPath}`);
-  
-  // In your notification sending function, add urgency header
-const payload = JSON.stringify({
-  title: title,
-  body: body,
-  icon: '/icon-192.png',
-  badge: '/icon-96.png',
-  tag: `kitchen-${orderId || Date.now()}`,
-  sound: soundPath,
-  vibrate: [500, 200, 500],
-  data: { url: '/kitchen', orderId, ...extraData },
-  requireInteraction: true,
-  urgency: 'high',  // Add this for higher priority
-  priority: 10       // Add this for higher priority
-});
-
-// Add headers for better delivery
-const options = {
-  headers: {
-    'Content-Type': 'application/json',
-    'Urgency': 'high',
-    'Priority': '10'
+  // Different tags for different notification types
+  let tag = `kitchen-${orderId || Date.now()}`;
+  if (extraData.isReady) {
+    tag = `order-ready-${orderId}`;
+  } else if (extraData.isRunningOrder) {
+    tag = `order-modified-running-${orderId}`;
+  } else if (extraData.orderType) {
+    tag = `new-order-${orderId}`;
   }
-};
+  
+  const payload = JSON.stringify({
+    title: title,
+    body: body,
+    icon: '/icon-192.png',
+    badge: '/icon-96.png',
+    tag: tag,
+    sound: soundPath,
+    data: { url: '/kitchen', orderId, ...extraData },
+    vibrate: extraData.isReady ? [200, 100, 200] : [500, 200, 500],
+    requireInteraction: true,
+    urgency: 'high',
+    priority: 10
+  });
   
   let sent = 0;
   let failed = 0;
@@ -166,7 +159,7 @@ const options = {
       try {
         await webpush.sendNotification(userInfo.subscription, payload);
         sent++;
-        console.log(`✅ Notification sent to ${userInfo.username} (${userId})`);
+        console.log(`✅ ${extraData.isReady ? 'Order ready' : 'Notification'} sent to ${userInfo.username}`);
       } catch (error) {
         console.error(`❌ Failed to send to ${userId}:`, error.message);
         failed++;
@@ -223,14 +216,13 @@ export const notifyKitchenNewOrder = async (order) => {
       body = `Order #${orderNumber}`;
   }
   
-  console.log(`📤 Sending notification: ${title}`);
-  const result = await notifyKitchenStaff(title, body, soundFile, order._id, {
+  console.log(`📤 Sending new order notification: ${title}`);
+  return await notifyKitchenStaff(title, body, soundFile, order._id, {
     orderType: order.orderType,
     tableNumber: order.tableNumber,
-    deliveryPlatform: order.deliveryPlatform
+    deliveryPlatform: order.deliveryPlatform,
+    isNew: true
   });
-  
-  return result;
 };
 
 // Kitchen notification for order modification
@@ -245,8 +237,10 @@ export const notifyKitchenOrderModified = async (order, isRunningOrder = false) 
   
   if (isRunningOrder) {
     title = '🔄 Running Order Modified';
+    body = `Table ${order.tableNumber} - Running Order #${order.displayOrderNumber || order.orderNumber}`;
   }
   
+  console.log(`📤 Sending order modified notification: ${title}`);
   return await notifyKitchenStaff(title, body, soundFile, order._id, { isRunningOrder });
 };
 
@@ -256,16 +250,18 @@ export const notifyKitchenInstantOrder = async (order) => {
   const title = '⚡ INSTANT ORDER REQUIRED!';
   const body = `Order #${order.displayOrderNumber || order.orderNumber} needs immediate attention`;
   
+  console.log(`📤 Sending instant order notification: ${title}`);
   return await notifyKitchenStaff(title, body, soundFile, order._id, { urgent: true });
 };
 
-// Kitchen notification for order ready (for billing)
+// Kitchen notification for order ready (for billing) - FIXED: separate from modify
 export const notifyOrderReady = async (order) => {
   const soundFile = 'order-ready';
   const title = '💰 Order Ready for Billing';
   const body = `Order #${order.displayOrderNumber || order.orderNumber} is ready for payment`;
   
-  return await notifyKitchenStaff(title, body, soundFile, order._id);
+  console.log(`📤 Sending order ready notification: ${title}`);
+  return await notifyKitchenStaff(title, body, soundFile, order._id, { isReady: true });
 };
 
 // Kitchen notification for cancellation request
@@ -274,6 +270,7 @@ export const notifyCancellationRequest = async (order, item) => {
   const title = '❌ Cancellation Requested';
   const body = `${item.name} from Order #${order.displayOrderNumber || order.orderNumber} needs approval`;
   
+  console.log(`📤 Sending cancellation request notification: ${title}`);
   return await notifyKitchenStaff(title, body, soundFile, order._id, { itemName: item.name });
 };
 
