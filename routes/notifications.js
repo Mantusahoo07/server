@@ -24,7 +24,7 @@ const getSoundForOrderType = (order) => {
   }
 };
 
-// Send notification to kitchen staff with custom sound
+// Send notification to kitchen staff with custom sound (Firefox optimized)
 export const notifyKitchen = async (title, body, sound, orderId, extraData = {}) => {
   const kitchenSubscribers = roleSubscriptions.get('kitchen');
   
@@ -33,19 +33,25 @@ export const notifyKitchen = async (title, body, sound, orderId, extraData = {})
     return { success: false, sent: 0 };
   }
   
-  // For browsers that support custom sound (Firefox, Safari)
+  // Firefox supports custom sound with this payload structure
   const payload = JSON.stringify({
     title: title,
     body: body,
     icon: '/icons/icon-192.png',
     badge: '/icons/icon-96.png',
     tag: `kitchen-${orderId || Date.now()}`,
-    sound: sound,  // This works in Firefox!
+    sound: sound,  // Works perfectly in Firefox!
     data: { url: '/kitchen', orderId, ...extraData },
     vibrate: extraData.isReady ? [200, 100, 200] : [500, 200, 500],
     requireInteraction: true,
     urgency: 'high',
-    priority: 10
+    priority: 10,
+    // Firefox specific options
+    actions: [
+      { action: 'open', title: 'Open Kitchen' },
+      { action: 'dismiss', title: 'Dismiss' }
+    ],
+    silent: false
   });
   
   let sent = 0;
@@ -57,7 +63,7 @@ export const notifyKitchen = async (title, body, sound, orderId, extraData = {})
       try {
         await webpush.sendNotification(userInfo.subscription, payload);
         sent++;
-        console.log(`✅ Notification sent to ${userInfo.username}`);
+        console.log(`✅ Notification sent to ${userInfo.username} (${userInfo.browser})`);
       } catch (error) {
         console.error(`Failed to send to ${userId}:`, error.message);
         failed++;
@@ -73,11 +79,12 @@ export const notifyKitchen = async (title, body, sound, orderId, extraData = {})
   return { success: true, sent, failed };
 };
 
-// Notification for new order with custom sound
+// New Dine-In Order
 export const notifyKitchenNewOrder = async (order) => {
   const sound = getSoundForOrderType(order);
-  let title = '', body = '';
   const orderNumber = order.displayOrderNumber || order.orderNumber;
+  
+  let title = '', body = '';
   
   switch (order.orderType) {
     case 'dine-in':
@@ -98,12 +105,19 @@ export const notifyKitchenNewOrder = async (order) => {
       }
       body = `Order #${orderNumber}`;
       break;
+    default:
+      title = '🍽️ New Order';
+      body = `Order #${orderNumber}`;
   }
   
-  return await notifyKitchen(title, body, sound, order._id, { orderType: order.orderType });
+  return await notifyKitchen(title, body, sound, order._id, { 
+    orderType: order.orderType,
+    tableNumber: order.tableNumber,
+    deliveryPlatform: order.deliveryPlatform
+  });
 };
 
-// Notification for order ready with custom sound
+// Order Ready for Billing
 export const notifyOrderReady = async (order) => {
   const sound = '/sounds/order-ready.mp3';
   const title = '💰 Order Ready for Billing';
@@ -112,22 +126,43 @@ export const notifyOrderReady = async (order) => {
   return await notifyKitchen(title, body, sound, order._id, { isReady: true });
 };
 
-// Notification for order modified with custom sound
-export const notifyKitchenOrderModified = async (order) => {
+// Order Modified
+export const notifyKitchenOrderModified = async (order, isRunningOrder = false) => {
   const sound = '/sounds/order-modified.mp3';
-  const title = '✏️ Order Modified';
-  const body = `Order #${order.displayOrderNumber || order.orderNumber} has been modified`;
+  let title = '✏️ Order Modified';
+  let body = `Order #${order.displayOrderNumber || order.orderNumber}`;
   
-  return await notifyKitchen(title, body, sound, order._id, { isModified: true });
+  if (order.tableNumber) {
+    body = `Table ${order.tableNumber} - Order #${order.displayOrderNumber || order.orderNumber}`;
+  }
+  
+  if (isRunningOrder) {
+    title = '🔄 Running Order Modified';
+    body = `Table ${order.tableNumber} - Running Order #${order.displayOrderNumber || order.orderNumber}`;
+  }
+  
+  return await notifyKitchen(title, body, sound, order._id, { isModified: true, isRunningOrder });
 };
 
-// Notification for instant order with custom sound
+// Instant Order (Urgent)
 export const notifyKitchenInstantOrder = async (order) => {
   const sound = '/sounds/instant-order.mp3';
   const title = '⚡ INSTANT ORDER REQUIRED!';
   const body = `Order #${order.displayOrderNumber || order.orderNumber} needs immediate attention`;
   
   return await notifyKitchen(title, body, sound, order._id, { urgent: true });
+};
+
+// Cancellation Request
+export const notifyCancellationRequest = async (order, item) => {
+  const sound = '/sounds/cancellation-request.mp3';
+  const title = '❌ Cancellation Requested';
+  const body = `${item.name} from Order #${order.displayOrderNumber || order.orderNumber} needs approval`;
+  
+  return await notifyKitchen(title, body, sound, order._id, { 
+    itemName: item.name,
+    isCancellation: true 
+  });
 };
 
 // Routes
@@ -146,12 +181,13 @@ router.post('/subscribe', authenticate, async (req, res) => {
     const userAgent = req.headers['user-agent'] || '';
     const isFirefox = userAgent.includes('Firefox');
     const isSafari = userAgent.includes('Safari') && !userAgent.includes('Chrome');
+    const browser = isFirefox ? 'Firefox' : (isSafari ? 'Safari' : 'Other');
     
     subscriptions.set(req.userId.toString(), { 
       subscription, 
       userRole: user.role,
       username: user.username,
-      browser: isFirefox ? 'firefox' : (isSafari ? 'safari' : 'other')
+      browser: browser
     });
     
     if (user.role === 'kitchen') {
@@ -159,14 +195,36 @@ router.post('/subscribe', authenticate, async (req, res) => {
       roleSubscriptions.get('kitchen').add(req.userId.toString());
     }
     
-    console.log(`✅ ${user.username} (${user.role}) subscribed from ${isFirefox ? 'Firefox' : (isSafari ? 'Safari' : 'other')} browser`);
+    console.log(`✅ ${user.username} (${user.role}) subscribed from ${browser}`);
+    
+    // Send welcome notification with sound (Firefox will play it!)
+    if (isFirefox && user.role === 'kitchen') {
+      const welcomePayload = JSON.stringify({
+        title: '🔔 Kitchen Notifications Active',
+        body: 'You will now receive real-time order updates with sound!',
+        icon: '/icons/icon-192.png',
+        tag: 'welcome',
+        sound: '/sounds/order-ready.mp3',
+        vibrate: [200, 100, 200],
+        requireInteraction: false
+      });
+      
+      try {
+        await webpush.sendNotification(subscription, welcomePayload);
+        console.log('✅ Welcome notification sent with sound');
+      } catch (err) {
+        console.error('Welcome notification error:', err.message);
+      }
+    }
     
     res.json({ 
       success: true, 
-      browser: isFirefox ? 'firefox' : (isSafari ? 'safari' : 'other'),
-      soundSupported: isFirefox || isSafari
+      browser: browser,
+      soundSupported: isFirefox,
+      message: isFirefox ? 'Custom sounds enabled!' : 'For best experience, use Firefox browser'
     });
   } catch (error) {
+    console.error('Subscribe error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -176,8 +234,25 @@ router.post('/unsubscribe', authenticate, async (req, res) => {
     subscriptions.delete(req.userId.toString());
     const kitchenSet = roleSubscriptions.get('kitchen');
     if (kitchenSet) kitchenSet.delete(req.userId.toString());
+    console.log(`❌ User ${req.userId} unsubscribed`);
     res.json({ success: true });
   } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/test-kitchen', authenticate, async (req, res) => {
+  try {
+    const result = await notifyKitchen(
+      '🔔 Test Notification',
+      'This is a test notification with custom sound!',
+      '/sounds/order-ready.mp3',
+      null,
+      { test: true }
+    );
+    res.json({ success: true, result });
+  } catch (error) {
+    console.error('Test error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -185,21 +260,23 @@ router.post('/unsubscribe', authenticate, async (req, res) => {
 router.get('/stats', authenticate, async (req, res) => {
   try {
     const kitchenSubscribers = roleSubscriptions.get('kitchen') || new Set();
-    const browserStats = { firefox: 0, safari: 0, other: 0 };
+    const browserStats = { Firefox: 0, Safari: 0, Other: 0 };
     
     for (const userId of kitchenSubscribers) {
       const info = subscriptions.get(userId);
       if (info) {
-        if (info.browser === 'firefox') browserStats.firefox++;
-        else if (info.browser === 'safari') browserStats.safari++;
-        else browserStats.other++;
+        if (info.browser === 'Firefox') browserStats.Firefox++;
+        else if (info.browser === 'Safari') browserStats.Safari++;
+        else browserStats.Other++;
       }
     }
     
     res.json({
       kitchenSubscribers: kitchenSubscribers.size,
       totalSubscriptions: subscriptions.size,
-      browserStats
+      browserStats,
+      recommendedBrowser: 'Firefox',
+      soundSupported: true
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
