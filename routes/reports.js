@@ -7,12 +7,12 @@ const router = express.Router();
 router.use(authenticate);
 router.use(authorize('admin', 'manager'));
 
-// Sales report
+// Sales report by date range
 router.get('/sales', async (req, res) => {
   try {
-    const { startDate, endDate } = req.query;
-    const match = { status: 'completed' };
+    const { startDate, endDate, groupBy = 'day' } = req.query;
     
+    const match = {};
     if (startDate && endDate) {
       match.createdAt = {
         $gte: new Date(startDate),
@@ -20,29 +20,44 @@ router.get('/sales', async (req, res) => {
       };
     }
     
-    const sales = await Order.aggregate([
+    let groupFormat;
+    switch(groupBy) {
+      case 'hour':
+        groupFormat = { $hour: '$createdAt' };
+        break;
+      case 'day':
+        groupFormat = { $dayOfMonth: '$createdAt' };
+        break;
+      case 'month':
+        groupFormat = { $month: '$createdAt' };
+        break;
+      default:
+        groupFormat = { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } };
+    }
+    
+    const salesData = await Order.aggregate([
       { $match: match },
       { $group: {
-        _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+        _id: groupFormat,
         totalSales: { $sum: '$total' },
         orderCount: { $sum: 1 },
-        avgOrderValue: { $avg: '$total' }
+        averageOrderValue: { $avg: '$total' }
       }},
       { $sort: { _id: 1 } }
     ]);
     
-    res.json(sales);
+    res.json(salesData);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// Top items report
+// Top selling items report
 router.get('/top-items', async (req, res) => {
   try {
     const { limit = 10, startDate, endDate } = req.query;
-    const match = { status: 'completed' };
     
+    const match = {};
     if (startDate && endDate) {
       match.createdAt = {
         $gte: new Date(startDate),
@@ -72,8 +87,8 @@ router.get('/top-items', async (req, res) => {
 router.get('/staff-performance', async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
-    const match = { status: 'completed' };
     
+    const match = {};
     if (startDate && endDate) {
       match.createdAt = {
         $gte: new Date(startDate),
@@ -95,14 +110,7 @@ router.get('/staff-performance', async (req, res) => {
         foreignField: '_id',
         as: 'staff'
       }},
-      { $unwind: { path: '$staff', preserveNullAndEmptyArrays: true } },
-      { $project: {
-        staffName: '$staff.username',
-        staffRole: '$staff.role',
-        ordersProcessed: 1,
-        totalRevenue: 1,
-        averageOrderValue: 1
-      }}
+      { $unwind: '$staff' }
     ]);
     
     res.json(performance);

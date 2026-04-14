@@ -4,18 +4,26 @@ import { authenticate } from '../middleware/auth.js';
 
 const router = express.Router();
 
-// Save receipt
+// Save receipt (authenticated)
 router.post('/', authenticate, async (req, res) => {
   try {
     const { receiptId, orderId, orderNumber, receiptData } = req.body;
     
+    // Check if receipt already exists
     let receipt = await Receipt.findOne({ receiptId });
     
     if (receipt) {
+      // Update existing
       receipt.receiptData = receiptData;
       await receipt.save();
     } else {
-      receipt = new Receipt({ receiptId, orderId, orderNumber, receiptData });
+      // Create new
+      receipt = new Receipt({
+        receiptId,
+        orderId,
+        orderNumber,
+        receiptData
+      });
       await receipt.save();
     }
     
@@ -27,7 +35,7 @@ router.post('/', authenticate, async (req, res) => {
   }
 });
 
-// Get receipt by ID (public)
+// Get receipt by ID (public - no auth needed for viewing)
 router.get('/:receiptId', async (req, res) => {
   try {
     const receipt = await Receipt.findOne({ receiptId: req.params.receiptId });
