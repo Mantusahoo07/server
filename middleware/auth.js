@@ -1,64 +1,50 @@
-import jwt from 'jsonwebtoken';
-import User from '../models/User.js';
+import express from 'express';
+import { 
+  checkFirstRun,
+  createFirstAdmin,
+  register, 
+  login, 
+  changePassword, 
+  getCurrentUser,
+  getAllUsers,
+  updateUser,
+  deleteUser
+} from '../controllers/authController.js';
+import { authenticate, authorize } from '../middleware/auth.js';
 
-export const authenticate = async (req, res, next) => {
-  try {
-    const token = req.header('Authorization')?.replace('Bearer ', '');
-    
-    if (!token) {
-      return res.status(401).json({ error: 'Authentication required' });
-    }
-    
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secretkey');
-    const user = await User.findById(decoded.userId);
-    
-    if (!user || !user.active) {
-      return res.status(401).json({ error: 'Invalid token' });
-    }
-    
-    req.userId = user._id;
-    req.userRole = user.role;
-    req.userPermissions = user.permissions;
-    next();
-  } catch (error) {
-    res.status(401).json({ error: 'Invalid token' });
-  }
-};
+const router = express.Router();
 
-export const authorize = (...roles) => {
-  return (req, res, next) => {
-    if (!roles.includes(req.userRole)) {
-      return res.status(403).json({ error: 'Insufficient permissions' });
-    }
-    next();
-  };
-};
+// ============ Public Routes (No Authentication Required) ============
 
-export const checkPermission = (permission) => {
-  return (req, res, next) => {
-    if (!req.userPermissions || !req.userPermissions[permission]) {
-      return res.status(403).json({ error: 'Insufficient permissions' });
-    }
-    next();
-  };
-};
+// Check if this is the first run (no users in database)
+router.get('/check-first-run', checkFirstRun);
 
-// Role-based access helpers
-export const canAccessTab = (tab) => {
-  return (req, res, next) => {
-    const tabPermissions = {
-      'pos': 'canAccessPOS',
-      'kitchen': 'canAccessKitchen',
-      'orders': 'canAccessOrders',
-      'reports': 'canAccessReports',
-      'settings': 'canAccessSettings'
-    };
-    
-    const permission = tabPermissions[tab];
-    if (!permission || req.userPermissions[permission]) {
-      next();
-    } else {
-      res.status(403).json({ error: `Access denied for ${tab} tab` });
-    }
-  };
-};
+// Create the first admin user (only works when no users exist)
+router.post('/create-first-admin', createFirstAdmin);
+
+// Regular login
+router.post('/login', login);
+
+// ============ Protected Routes (Authentication Required) ============
+
+// Get current user info
+router.get('/me', authenticate, getCurrentUser);
+
+// Change password
+router.post('/change-password', authenticate, changePassword);
+
+// ============ Admin Only Routes ============
+
+// Register new user (admin only)
+router.post('/register', authenticate, authorize('admin'), register);
+
+// Get all users (admin only)
+router.get('/users', authenticate, authorize('admin'), getAllUsers);
+
+// Update user (admin only)
+router.put('/users/:id', authenticate, authorize('admin'), updateUser);
+
+// Delete user (admin only)
+router.delete('/users/:id', authenticate, authorize('admin'), deleteUser);
+
+export default router;
