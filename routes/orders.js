@@ -98,7 +98,6 @@ router.post('/', authenticate, async (req, res) => {
   try {
     const orderData = req.body;
     
-    // REMOVE any _id that might come from frontend
     delete orderData._id;
     delete orderData.id;
     
@@ -109,7 +108,6 @@ router.post('/', authenticate, async (req, res) => {
     
     console.log('📝 Creating order:', JSON.stringify(orderData, null, 2));
     
-    // Handle table session for dine-in orders
     if (orderData.orderType === 'dine-in' && orderData.tableNumber) {
       let table = await Table.findOne({ tableNumber: orderData.tableNumber });
       
@@ -122,36 +120,30 @@ router.post('/', authenticate, async (req, res) => {
         await table.save();
       }
       
-      // Check if table has an active session (running orders)
       if (table.status === 'running' && table.currentSessionId && table.baseOrderNumber) {
-        // Additional order for existing table session
         tableSessionId = table.currentSessionId;
         isAdditionalOrder = true;
         baseOrderNumber = table.baseOrderNumber;
-        runningNumber = table.runningOrderCount; // This will be 1, 2, 3, etc.
+        runningNumber = table.runningOrderCount;
         
         console.log(`📝 Additional order for table ${orderData.tableNumber}: baseOrderNumber=${baseOrderNumber}, runningNumber=${runningNumber}`);
       } else {
-        // FIRST ORDER AFTER TABLE IS AVAILABLE - Start new session
         tableSessionId = generateTableSessionId(orderData.tableNumber);
         isAdditionalOrder = false;
-        runningNumber = 0; // First order has no suffix
+        runningNumber = 0;
         
-        // Generate NEW base order number (increment from last order overall)
         const lastOrder = await Order.findOne().sort({ baseOrderNumber: -1 });
         baseOrderNumber = lastOrder ? lastOrder.baseOrderNumber + 1 : 1000000;
         
-        // Update table with new session
         table.currentSessionId = tableSessionId;
         table.baseOrderNumber = baseOrderNumber;
         table.status = 'running';
-        table.runningOrderCount = 1; // First order
+        table.runningOrderCount = 1;
         await table.save();
         
         console.log(`📝 NEW SESSION - First order for table ${orderData.tableNumber}: baseOrderNumber=${baseOrderNumber}`);
       }
     } else {
-      // Non dine-in orders
       const lastOrder = await Order.findOne().sort({ baseOrderNumber: -1 });
       baseOrderNumber = lastOrder ? lastOrder.baseOrderNumber + 1 : 1000000;
       runningNumber = 0;
@@ -159,7 +151,6 @@ router.post('/', authenticate, async (req, res) => {
     
     const displayOrderNumber = runningNumber === 0 ? `${baseOrderNumber}` : `${baseOrderNumber}-${runningNumber}`;
     
-    // Create order
     const order = new Order({
       ...orderData,
       baseOrderNumber,
@@ -182,7 +173,6 @@ router.post('/', authenticate, async (req, res) => {
     const savedOrder = await order.save();
     console.log(`✅ Order saved: ${displayOrderNumber} (ID: ${savedOrder._id})`);
     
-    // Update table running order count after order is saved (only for additional orders)
     if (orderData.orderType === 'dine-in' && orderData.tableNumber && isAdditionalOrder) {
       const table = await Table.findOne({ tableNumber: orderData.tableNumber });
       if (table) {
@@ -194,13 +184,11 @@ router.post('/', authenticate, async (req, res) => {
     
     const io = req.app.get('io');
     
-    // Emit events
     if (io) {
       io.emit('new-order', savedOrder);
       io.emit('order-updated', savedOrder);
       io.emit('new-order-received', savedOrder);
       
-      // Send push notification to kitchen staff
       await notifyKitchenNewOrder(savedOrder);
       
       if (orderData.orderType === 'dine-in' && orderData.tableNumber) {
@@ -260,7 +248,6 @@ router.post('/:id/items', authenticate, async (req, res) => {
       order.items.push(newItem);
     }
     
-    // Update totals
     order.subtotal = order.items.reduce((sum, i) => sum + (i.price * i.quantity), 0);
     order.tax = order.subtotal * (order.taxRate / 100);
     order.serviceCharge = order.subtotal * (order.serviceChargeRate / 100);
@@ -284,7 +271,6 @@ router.post('/:id/items', authenticate, async (req, res) => {
         newQuantity: newItem.quantity
       });
       
-      // Send push notification to kitchen staff about modification
       await notifyKitchenOrderModified(order, order.isRunningOrder);
     }
     
@@ -307,7 +293,6 @@ router.delete('/:id/items/:itemId', authenticate, async (req, res) => {
     
     order.items = order.items.filter(i => i.id !== req.params.itemId);
     
-    // Update totals
     order.subtotal = order.items.reduce((sum, i) => sum + (i.price * i.quantity), 0);
     order.tax = order.subtotal * (order.taxRate / 100);
     order.serviceCharge = order.subtotal * (order.serviceChargeRate / 100);
@@ -330,7 +315,6 @@ router.delete('/:id/items/:itemId', authenticate, async (req, res) => {
         removedItem: removedItem?.name
       });
       
-      // Send push notification to kitchen staff about modification
       await notifyKitchenOrderModified(order, order.isRunningOrder);
     }
     
@@ -362,7 +346,6 @@ router.patch('/:id/items/:itemId', authenticate, async (req, res) => {
     item.isModified = true;
     item.modifiedAt = new Date();
     
-    // Update totals
     order.subtotal = order.items.reduce((sum, i) => sum + (i.price * i.quantity), 0);
     order.tax = order.subtotal * (order.taxRate / 100);
     order.serviceCharge = order.subtotal * (order.serviceChargeRate / 100);
@@ -392,7 +375,6 @@ router.patch('/:id/items/:itemId', authenticate, async (req, res) => {
         newQuantity: quantity
       });
       
-      // Send push notification to kitchen staff about modification
       await notifyKitchenOrderModified(order, order.isRunningOrder);
     }
     
@@ -403,7 +385,7 @@ router.patch('/:id/items/:itemId', authenticate, async (req, res) => {
   }
 });
 
-// Update order status
+// Update order status - FIXED: uses notifyOrderReady for ready_for_billing
 router.patch('/:id/status', authenticate, async (req, res) => {
   try {
     const { status } = req.body;
@@ -435,11 +417,14 @@ router.patch('/:id/status', authenticate, async (req, res) => {
     if (io) {
       io.emit('order-updated', order);
       if (status === 'accepted') io.emit('order-accepted', order._id);
+      
+      // FIX: Use notifyOrderReady for ready_for_billing status
       if (status === 'ready_for_billing') {
         io.emit('order-ready-for-billing', order._id);
-        // Send push notification for ready order
+        // Send correct push notification for order ready (not modify)
         await notifyOrderReady(order);
       }
+      
       if (status === 'completed') io.emit('order-completed', order._id);
       
       if ((status === 'cancelled' || status === 'completed') && order.tableNumber) {
@@ -540,7 +525,7 @@ router.patch('/:id/complete-payment', authenticate, async (req, res) => {
   }
 });
 
-// Complete billing for table (close all orders and reset table)
+// Complete billing for table
 router.post('/table/:tableNumber/complete-billing', authenticate, async (req, res) => {
   try {
     const tableNumber = parseInt(req.params.tableNumber);
@@ -555,7 +540,6 @@ router.post('/table/:tableNumber/complete-billing', authenticate, async (req, re
       return res.status(404).json({ error: 'No active orders found for this table' });
     }
     
-    // Complete all active orders
     for (const order of activeOrders) {
       order.status = 'completed';
       order.completedAt = new Date();
@@ -564,7 +548,6 @@ router.post('/table/:tableNumber/complete-billing', authenticate, async (req, re
       await order.save();
     }
     
-    // RESET TABLE - Clear session and base order number
     const table = await Table.findOne({ tableNumber: tableNumber });
     if (table) {
       table.status = 'available';
@@ -645,7 +628,7 @@ router.post('/:id/credit-sale', authenticate, async (req, res) => {
   }
 });
 
-// Request cancellation of an item from kitchen
+// Request cancellation
 router.post('/:id/items/:itemId/request-cancellation', authenticate, async (req, res) => {
   try {
     const { reason } = req.body;
@@ -660,7 +643,6 @@ router.post('/:id/items/:itemId/request-cancellation', authenticate, async (req,
       return res.status(404).json({ error: 'Item not found' });
     }
     
-    // Only allow cancellation request if item is not already completed or cancelled
     if (item.status === 'completed') {
       return res.status(400).json({ error: 'Cannot cancel completed items' });
     }
@@ -692,7 +674,6 @@ router.post('/:id/items/:itemId/request-cancellation', authenticate, async (req,
         requestedAt: item.cancellationRequestedAt
       });
       
-      // Send push notification for cancellation request
       await notifyCancellationRequest(order, item);
     }
     
@@ -703,7 +684,7 @@ router.post('/:id/items/:itemId/request-cancellation', authenticate, async (req,
   }
 });
 
-// Approve cancellation (Admin/POS)
+// Approve cancellation
 router.post('/:id/items/:itemId/approve-cancellation', authenticate, async (req, res) => {
   try {
     const order = await Order.findById(req.params.id);
@@ -723,7 +704,6 @@ router.post('/:id/items/:itemId/approve-cancellation', authenticate, async (req,
       return res.status(400).json({ error: 'No cancellation request for this item' });
     }
     
-    // Mark as cancelled and remove from order
     item.status = 'cancelled';
     item.isRemoved = true;
     item.removedAt = new Date();
@@ -731,17 +711,14 @@ router.post('/:id/items/:itemId/approve-cancellation', authenticate, async (req,
     item.cancellationApprovedAt = new Date();
     item.cancellationApprovedBy = req.userId;
     
-    // Remove the item from the items array
     order.items.splice(itemIndex, 1);
     
-    // RECALCULATE ALL TOTALS
     order.subtotal = order.items.reduce((sum, i) => sum + (i.price * i.quantity), 0);
     order.tax = order.subtotal * (order.taxRate / 100);
     order.serviceCharge = order.subtotal * (order.serviceChargeRate / 100);
     order.total = order.subtotal + order.tax + order.serviceCharge;
     order.updatedAt = new Date();
     
-    // If no items left, cancel the entire order
     if (order.items.length === 0) {
       order.status = 'cancelled';
       order.cancelledAt = new Date();
@@ -770,7 +747,7 @@ router.post('/:id/items/:itemId/approve-cancellation', authenticate, async (req,
   }
 });
 
-// Reject cancellation (Admin/POS)
+// Reject cancellation
 router.post('/:id/items/:itemId/reject-cancellation', authenticate, async (req, res) => {
   try {
     const { rejectReason } = req.body;
@@ -789,7 +766,6 @@ router.post('/:id/items/:itemId/reject-cancellation', authenticate, async (req, 
       return res.status(400).json({ error: 'No cancellation request for this item' });
     }
     
-    // Reset the item status
     item.cancellationRequested = false;
     item.cancellationRequestedAt = null;
     item.cancellationRequestedBy = null;
@@ -817,7 +793,7 @@ router.post('/:id/items/:itemId/reject-cancellation', authenticate, async (req, 
   }
 });
 
-// Get all pending cancellation requests
+// Get pending cancellation requests
 router.get('/cancellation-requests/pending', authenticate, async (req, res) => {
   try {
     const orders = await Order.find({
