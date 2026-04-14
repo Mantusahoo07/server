@@ -176,7 +176,7 @@ const notifyKitchenStaff = async (title, body, sound, orderId, extraData = {}) =
 };
 
 // Kitchen notification for new order
-const notifyKitchenNewOrder = async (order) => {
+export const notifyKitchenNewOrder = async (order) => {
   console.log('🔔 notifyKitchenNewOrder called with order:', order.orderType, order.orderNumber);
   
   let soundFile = 'new-dine-in';
@@ -226,7 +226,7 @@ const notifyKitchenNewOrder = async (order) => {
 };
 
 // Kitchen notification for order modification
-const notifyKitchenOrderModified = async (order, isRunningOrder = false) => {
+export const notifyKitchenOrderModified = async (order, isRunningOrder = false) => {
   const soundFile = 'order-modified';
   let title = '✏️ Order Modified';
   let body = `Order #${order.displayOrderNumber || order.orderNumber}`;
@@ -240,6 +240,33 @@ const notifyKitchenOrderModified = async (order, isRunningOrder = false) => {
   }
   
   return await notifyKitchenStaff(title, body, soundFile, order._id, { isRunningOrder });
+};
+
+// Kitchen notification for instant order
+export const notifyKitchenInstantOrder = async (order) => {
+  const soundFile = 'instant-order';
+  const title = '⚡ INSTANT ORDER REQUIRED!';
+  const body = `Order #${order.displayOrderNumber || order.orderNumber} needs immediate attention`;
+  
+  return await notifyKitchenStaff(title, body, soundFile, order._id, { urgent: true });
+};
+
+// Kitchen notification for order ready (for billing)
+export const notifyOrderReady = async (order) => {
+  const soundFile = 'order-ready';
+  const title = '💰 Order Ready for Billing';
+  const body = `Order #${order.displayOrderNumber || order.orderNumber} is ready for payment`;
+  
+  return await notifyKitchenStaff(title, body, soundFile, order._id);
+};
+
+// Kitchen notification for cancellation request
+export const notifyCancellationRequest = async (order, item) => {
+  const soundFile = 'cancellation-request';
+  const title = '❌ Cancellation Requested';
+  const body = `${item.name} from Order #${order.displayOrderNumber || order.orderNumber} needs approval`;
+  
+  return await notifyKitchenStaff(title, body, soundFile, order._id, { itemName: item.name });
 };
 
 // Test endpoint
@@ -290,6 +317,4 @@ router.get('/stats', authenticate, async (req, res) => {
   }
 });
 
-// Export the functions
-export { notifyKitchenNewOrder, notifyKitchenOrderModified };
 export default router;
