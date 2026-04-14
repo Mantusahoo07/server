@@ -11,6 +11,7 @@ export const getMenuItems = async (req, res) => {
     
     const menuItems = await MenuItem.find(query).sort({ sortOrder: 1, name: 1 });
     
+    // Populate category names for response
     const categories = await Category.find({});
     const categoryMap = new Map();
     categories.forEach(cat => {
@@ -24,10 +25,6 @@ export const getMenuItems = async (req, res) => {
         itemObj.categoryName = category.name;
         itemObj.categoryIcon = category.icon;
         itemObj.categoryBgColor = category.bgColor;
-      } else {
-        itemObj.categoryName = 'Uncategorized';
-        itemObj.categoryIcon = '📦';
-        itemObj.categoryBgColor = '#95a5a6';
       }
       return itemObj;
     });
@@ -41,7 +38,7 @@ export const getMenuItems = async (req, res) => {
 
 export const createMenuItem = async (req, res) => {
   try {
-    const { name, price, category, prepTime, available, description, sortOrder } = req.body;
+    const { name, price, category, prepTime, available, description, ingredients, calories } = req.body;
     
     if (category) {
       const categoryExists = await Category.findById(category);
@@ -57,11 +54,21 @@ export const createMenuItem = async (req, res) => {
       prepTime: prepTime || 10,
       available: available !== undefined ? available : true,
       description,
-      sortOrder: sortOrder || 0
+      ingredients,
+      calories
     });
     
     await menuItem.save();
-    res.status(201).json(menuItem);
+    
+    const categoryInfo = category ? await Category.findById(category) : null;
+    const responseItem = menuItem.toObject();
+    if (categoryInfo) {
+      responseItem.categoryName = categoryInfo.name;
+      responseItem.categoryIcon = categoryInfo.icon;
+      responseItem.categoryBgColor = categoryInfo.bgColor;
+    }
+    
+    res.status(201).json(responseItem);
   } catch (error) {
     console.error('Error creating menu item:', error);
     res.status(500).json({ error: error.message });
@@ -70,12 +77,12 @@ export const createMenuItem = async (req, res) => {
 
 export const updateMenuItem = async (req, res) => {
   try {
+    const { name, price, category, prepTime, available, description, ingredients, calories } = req.body;
+    
     const menuItem = await MenuItem.findById(req.params.id);
     if (!menuItem) {
       return res.status(404).json({ error: 'Menu item not found' });
     }
-    
-    const { name, price, category, prepTime, available, description, sortOrder } = req.body;
     
     if (category && category !== menuItem.category) {
       const categoryExists = await Category.findById(category);
@@ -90,11 +97,21 @@ export const updateMenuItem = async (req, res) => {
     menuItem.prepTime = prepTime !== undefined ? prepTime : menuItem.prepTime;
     menuItem.available = available !== undefined ? available : menuItem.available;
     menuItem.description = description !== undefined ? description : menuItem.description;
-    menuItem.sortOrder = sortOrder !== undefined ? sortOrder : menuItem.sortOrder;
+    menuItem.ingredients = ingredients || menuItem.ingredients;
+    menuItem.calories = calories || menuItem.calories;
     menuItem.updatedAt = new Date();
     
     await menuItem.save();
-    res.json(menuItem);
+    
+    const categoryInfo = menuItem.category ? await Category.findById(menuItem.category) : null;
+    const responseItem = menuItem.toObject();
+    if (categoryInfo) {
+      responseItem.categoryName = categoryInfo.name;
+      responseItem.categoryIcon = categoryInfo.icon;
+      responseItem.categoryBgColor = categoryInfo.bgColor;
+    }
+    
+    res.json(responseItem);
   } catch (error) {
     console.error('Error updating menu item:', error);
     res.status(500).json({ error: error.message });
@@ -104,9 +121,11 @@ export const updateMenuItem = async (req, res) => {
 export const deleteMenuItem = async (req, res) => {
   try {
     const menuItem = await MenuItem.findByIdAndDelete(req.params.id);
+    
     if (!menuItem) {
       return res.status(404).json({ error: 'Menu item not found' });
     }
+    
     res.json({ message: 'Menu item deleted successfully' });
   } catch (error) {
     console.error('Error deleting menu item:', error);
@@ -126,6 +145,16 @@ export const bulkUpdateAvailability = async (req, res) => {
     res.json({ message: 'Bulk update completed' });
   } catch (error) {
     console.error('Error bulk updating availability:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+export const getCategories = async (req, res) => {
+  try {
+    const categories = await Category.find({ isActive: true }).sort({ name: 1 });
+    res.json(categories);
+  } catch (error) {
+    console.error('Error fetching categories:', error);
     res.status(500).json({ error: error.message });
   }
 };

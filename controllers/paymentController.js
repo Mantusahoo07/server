@@ -2,13 +2,14 @@ import Razorpay from 'razorpay';
 import crypto from 'crypto';
 import Order from '../models/Order.js';
 
+// Initialize Razorpay with error handling
 let razorpay;
 try {
   razorpay = new Razorpay({
     key_id: process.env.RAZORPAY_KEY_ID,
     key_secret: process.env.RAZORPAY_KEY_SECRET
   });
-  console.log('Razorpay initialized');
+  console.log('Razorpay initialized successfully');
 } catch (error) {
   console.error('Razorpay initialization error:', error);
 }
@@ -17,18 +18,37 @@ export const createOrder = async (req, res) => {
   try {
     const { amount, currency, receipt } = req.body;
     
+    console.log('Creating Razorpay order with params:', { amount, currency, receipt });
+    console.log('Razorpay Key ID:', process.env.RAZORPAY_KEY_ID ? 'Present' : 'Missing');
+    console.log('Razorpay Key Secret:', process.env.RAZORPAY_KEY_SECRET ? 'Present' : 'Missing');
+    
+    if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
+      console.error('Razorpay credentials missing');
+      return res.status(500).json({ 
+        error: 'Payment gateway not configured',
+        details: 'Razorpay credentials missing'
+      });
+    }
+    
     const options = {
-      amount: Number(amount),
+      amount: Number(amount), // amount in paise
       currency: currency || 'INR',
-      receipt: receipt || `order_${Date.now()}`,
+      receipt: receipt,
       payment_capture: 1
     };
     
+    console.log('Razorpay order options:', options);
+    
     const order = await razorpay.orders.create(options);
+    console.log('Razorpay order created successfully:', order.id);
     res.json(order);
   } catch (error) {
     console.error('Razorpay order creation error:', error);
-    res.status(500).json({ error: error.message });
+    console.error('Error details:', error.error);
+    res.status(500).json({ 
+      error: error.error?.description || error.message || 'Failed to create payment order',
+      details: error.error
+    });
   }
 };
 
@@ -36,15 +56,21 @@ export const verifyPayment = async (req, res) => {
   try {
     const { orderId, paymentId, signature } = req.body;
     
+    console.log('Verifying payment:', { orderId, paymentId });
+    
     const body = orderId + '|' + paymentId;
     const expectedSignature = crypto
       .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
       .update(body.toString())
       .digest('hex');
     
-    if (expectedSignature === signature) {
+    const isAuthentic = expectedSignature === signature;
+    
+    if (isAuthentic) {
+      console.log('Payment verified successfully for order:', orderId);
       res.json({ success: true });
     } else {
+      console.log('Invalid signature for payment:', paymentId);
       res.status(400).json({ success: false, error: 'Invalid signature' });
     }
   } catch (error) {
@@ -59,7 +85,9 @@ export const refundPayment = async (req, res) => {
     
     const refund = await razorpay.payments.refund(paymentId, {
       amount: amount,
-      notes: { reason: reason || 'Customer refund' }
+      notes: {
+        reason: reason || 'Customer refund'
+      }
     });
     
     res.json({ success: true, refund });
@@ -75,7 +103,6 @@ export const getPaymentStatus = async (req, res) => {
     const payment = await razorpay.payments.fetch(paymentId);
     res.json(payment);
   } catch (error) {
-    console.error('Payment status error:', error);
     res.status(500).json({ error: error.message });
   }
 };
@@ -91,7 +118,7 @@ export const creditSale = async (req, res) => {
     
     order.payment = {
       method: 'credit',
-      status: 'credit_due',
+      status: 'credit_due', // Changed from 'pending' to 'credit_due' for better tracking
       amount: amount,
       transactionId: `CREDIT_${Date.now()}`,
       timestamp: new Date(),

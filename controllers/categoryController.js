@@ -1,5 +1,4 @@
 import Category from '../models/Category.js';
-import MenuItem from '../models/MenuItem.js';
 
 export const getCategories = async (req, res) => {
   try {
@@ -25,7 +24,7 @@ export const getCategoryById = async (req, res) => {
 
 export const createCategory = async (req, res) => {
   try {
-    const { name, icon, bgColor, sortOrder, showInKitchen, showInMenu } = req.body;
+    const { name, description, icon, bgColor, sortOrder } = req.body;
     
     const existingCategory = await Category.findOne({ name: { $regex: new RegExp(`^${name}$`, 'i') } });
     if (existingCategory) {
@@ -34,11 +33,10 @@ export const createCategory = async (req, res) => {
     
     const category = new Category({
       name,
+      description,
       icon: icon || '📦',
       bgColor: bgColor || '#95a5a6',
-      sortOrder: sortOrder || 0,
-      showInKitchen: showInKitchen !== undefined ? showInKitchen : true,
-      showInMenu: showInMenu !== undefined ? showInMenu : true
+      sortOrder: sortOrder || 0
     });
     
     await category.save();
@@ -51,12 +49,12 @@ export const createCategory = async (req, res) => {
 
 export const updateCategory = async (req, res) => {
   try {
+    const { name, description, icon, bgColor, sortOrder, isActive } = req.body;
+    
     const category = await Category.findById(req.params.id);
     if (!category) {
       return res.status(404).json({ error: 'Category not found' });
     }
-    
-    const { name, icon, bgColor, sortOrder, isActive, showInKitchen, showInMenu } = req.body;
     
     if (name && name !== category.name) {
       const existingCategory = await Category.findOne({ 
@@ -69,12 +67,11 @@ export const updateCategory = async (req, res) => {
     }
     
     category.name = name || category.name;
+    category.description = description !== undefined ? description : category.description;
     category.icon = icon || category.icon;
     category.bgColor = bgColor || category.bgColor;
     category.sortOrder = sortOrder !== undefined ? sortOrder : category.sortOrder;
     category.isActive = isActive !== undefined ? isActive : category.isActive;
-    category.showInKitchen = showInKitchen !== undefined ? showInKitchen : category.showInKitchen;
-    category.showInMenu = showInMenu !== undefined ? showInMenu : category.showInMenu;
     category.updatedAt = new Date();
     
     await category.save();
@@ -92,7 +89,10 @@ export const deleteCategory = async (req, res) => {
       return res.status(404).json({ error: 'Category not found' });
     }
     
+    // Import MenuItem dynamically to avoid circular dependency
+    const MenuItem = await import('../models/MenuItem.js').then(m => m.default);
     const itemsCount = await MenuItem.countDocuments({ category: req.params.id });
+    
     if (itemsCount > 0) {
       return res.status(400).json({ 
         error: `Cannot delete category with ${itemsCount} items. Move or delete items first.` 
@@ -103,21 +103,6 @@ export const deleteCategory = async (req, res) => {
     res.json({ message: 'Category deleted successfully' });
   } catch (error) {
     console.error('Error deleting category:', error);
-    res.status(500).json({ error: error.message });
-  }
-};
-
-export const reorderCategories = async (req, res) => {
-  try {
-    const { categories } = req.body;
-    
-    for (const cat of categories) {
-      await Category.findByIdAndUpdate(cat.id, { sortOrder: cat.sortOrder });
-    }
-    
-    res.json({ message: 'Categories reordered successfully' });
-  } catch (error) {
-    console.error('Error reordering categories:', error);
     res.status(500).json({ error: error.message });
   }
 };

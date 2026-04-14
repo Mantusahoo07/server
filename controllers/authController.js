@@ -2,13 +2,16 @@ import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
 
 const generateToken = (userId) => {
-  return jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: '7d' });
+  return jwt.sign({ userId }, process.env.JWT_SECRET || 'secretkey', {
+    expiresIn: '7d'
+  });
 };
 
 export const register = async (req, res) => {
   try {
     const { username, email, password, role } = req.body;
     
+    // Only admin can create users (already checked in middleware)
     const existingUser = await User.findOne({ $or: [{ email }, { username }] });
     if (existingUser) {
       return res.status(400).json({ error: 'User already exists' });
@@ -98,6 +101,7 @@ export const getCurrentUser = async (req, res) => {
 
 export const getAllUsers = async (req, res) => {
   try {
+    // Only admin can view all users (already checked in middleware)
     const users = await User.find().select('-password');
     res.json(users);
   } catch (error) {
@@ -114,6 +118,7 @@ export const updateUser = async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
     
+    // Prevent admin from changing their own role
     if (req.userId === user._id && role && role !== user.role) {
       return res.status(400).json({ error: 'You cannot change your own role' });
     }
@@ -145,6 +150,7 @@ export const deleteUser = async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
     
+    // Prevent admin from deleting themselves
     if (req.userId === user._id) {
       return res.status(400).json({ error: 'You cannot delete your own account' });
     }

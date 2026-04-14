@@ -34,7 +34,6 @@ export const saveBusinessDetails = async (req, res) => {
       await businessDetails.save();
     }
     
-    console.log('Business details saved:', businessDetails);
     res.json(businessDetails);
   } catch (error) {
     console.error('Error saving business details:', error);
