@@ -1,17 +1,23 @@
 import mongoose from 'mongoose';
 
 const businessDetailSchema = new mongoose.Schema({
-  key: { type: String, default: 'business-details', unique: true },
-  name: { type: String, default: 'Restaurant Name' },
+  key: {
+    type: String,
+    default: 'business-details',
+    unique: true
+  },
+  name: { type: String, default: '' },
   address: { type: String, default: '' },
   phone: { type: String, default: '' },
   email: { type: String, default: '' },
   gst: { type: String, default: '' },
   fssai: { type: String, default: '' },
-  upiId: { type: String, default: 'paytm.s1yxcay@pty' },
+  upiId: { type: String, default: '' },
+  logo: { type: String, default: '' },
   currencySymbol: { type: String, default: '₹' },
   taxLabel: { type: String, default: 'GST' },
-  footerMessage: { type: String, default: 'Thank you! Visit Again!' },
+  footerMessage: { type: String, default: '' },
+  // Print options
   printBusinessName: { type: Boolean, default: true },
   printAddress: { type: Boolean, default: true },
   printPhone: { type: Boolean, default: true },
@@ -25,7 +31,10 @@ const businessDetailSchema = new mongoose.Schema({
   printGatewayCharges: { type: Boolean, default: true },
   printFooter: { type: Boolean, default: true },
   printQrCode: { type: Boolean, default: true },
-  updatedAt: { type: Date, default: Date.now }
+  updatedAt: { type: Date, default: Date.now },
+  createdAt: { type: Date, default: Date.now }
 });
 
-export default mongoose.model('BusinessDetail', businessDetailSchema);
+const BusinessDetail = mongoose.models.BusinessDetail || mongoose.model('BusinessDetail', businessDetailSchema);
+
+export default BusinessDetail;
