@@ -1,5 +1,7 @@
 import express from 'express';
 import { 
+  checkFirstRun,
+  createFirstAdmin,
   register, 
   login, 
   changePassword, 
@@ -8,11 +10,13 @@ import {
   updateUser,
   deleteUser
 } from '../controllers/authController.js';
-import { authenticate, authorize } from '../middleware/auth.js';
+import { authenticate, authorize } from '../middleware/auth.js';  // Make sure this path is correct
 
 const router = express.Router();
 
 // Public routes
+router.get('/check-first-run', checkFirstRun);
+router.post('/create-first-admin', createFirstAdmin);
 router.post('/login', login);
 
 // Protected routes
