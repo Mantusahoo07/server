@@ -44,18 +44,13 @@ const initializeWebPush = () => {
   const publicKey = process.env.VAPID_PUBLIC_KEY;
   const privateKey = process.env.VAPID_PRIVATE_KEY;
   
+  console.log('🔑 VAPID_PUBLIC_KEY:', publicKey ? '✅ Present' : '❌ Missing');
+  console.log('🔑 VAPID_PRIVATE_KEY:', privateKey ? '✅ Present' : '❌ Missing');
+  
   if (!publicKey || !privateKey) {
-    console.log('⚠️ VAPID keys not found. Generating new keys...');
-    const vapidKeys = webpush.generateVAPIDKeys();
-    console.log('\n📢 PLEASE ADD THESE TO YOUR .env FILE:');
-    console.log(`VAPID_PUBLIC_KEY=${vapidKeys.publicKey}`);
-    console.log(`VAPID_PRIVATE_KEY=${vapidKeys.privateKey}\n`);
-    
-    // For development, we can still run without keys
+    console.log('⚠️ VAPID keys not found. Push notifications will not work.');
     if (process.env.NODE_ENV === 'production') {
       console.error('❌ VAPID keys required for production!');
-    } else {
-      console.log('⚠️ Running without push notifications (add VAPID keys to enable)');
     }
     return false;
   }
@@ -69,27 +64,27 @@ const initializeWebPush = () => {
   return true;
 };
 
-// Initialize web push
 const webPushInitialized = initializeWebPush();
 
-// Allowed origins
+// Allowed origins (add your Firebase URLs)
 const allowedOrigins = [
   'http://localhost:3000',
   'http://localhost:5173',
   'http://localhost:3001',
-  'https://pos-frontend.onrender.com',
   'https://pos-system-d98.web.app',
   'https://pos-system-d98.firebaseapp.com',
   process.env.CLIENT_URL
 ].filter(Boolean);
 
+console.log('📋 Allowed CORS origins:', allowedOrigins);
+
 // Socket.io configuration
 const io = new Server(httpServer, {
   cors: {
     origin: allowedOrigins,
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     credentials: true,
-    allowedHeaders: ['Content-Type', 'Authorization']
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept']
   },
   pingTimeout: 60000,
   pingInterval: 25000,
@@ -123,7 +118,7 @@ const connectWithRetry = async (retries = 5, delay = 5000) => {
 
 connectWithRetry();
 
-// Security Middleware (without rate limiting)
+// Security Middleware
 app.use(helmet({
   contentSecurityPolicy: false,
   crossOriginResourcePolicy: { policy: "cross-origin" }
@@ -139,11 +134,11 @@ app.use(morgan('combined'));
 app.use(cors({
   origin: function(origin, callback) {
     if (!origin) return callback(null, true);
-    if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV !== 'production') {
+    if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
       console.log('CORS blocked origin:', origin);
-      callback(null, true);
+      callback(null, true); // Allow anyway for development
     }
   },
   credentials: true,
@@ -176,7 +171,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// Health check endpoint with detailed status
+// Health check endpoint
 app.get('/health', async (req, res) => {
   const dbState = mongoose.connection.readyState;
   const dbStatus = {
@@ -318,7 +313,7 @@ httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`🔌 Socket.io ready for connections`);
   console.log(`📡 API URL: http://localhost:${PORT}/api`);
   console.log(`✅ CORS enabled for:`, allowedOrigins);
-  console.log(`📢 Push notifications: ${webPushInitialized ? '✅ Enabled' : '⚠️ Disabled (add VAPID keys to .env)'}`);
+  console.log(`📢 Push notifications: ${webPushInitialized ? '✅ Enabled' : '⚠️ Disabled'}`);
 });
 
 export { app, httpServer, io, getIO };
