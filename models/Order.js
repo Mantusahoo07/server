@@ -65,6 +65,8 @@ const orderSchema = new mongoose.Schema({
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   acceptedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   completedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+}, { 
+  suppressReservedKeysWarning: true  // Add this to suppress the warning
 });
 
 orderSchema.pre('save', function(next) {
