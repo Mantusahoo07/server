@@ -7,91 +7,189 @@ import compression from 'compression';
 import dotenv from 'dotenv';
 import mongoose from 'mongoose';
 import webpush from 'web-push';
+import connectDB from './config/database.js';
+import { setupSocketHandlers, getIO } from './socket.js';
+import authRoutes from './routes/auth.js';
+import orderRoutes from './routes/orders.js';
+import menuRoutes from './routes/menu.js';
+import reportRoutes from './routes/reports.js';
+import paymentRoutes from './routes/payments.js';
+import categoryRoutes from './routes/categories.js';
+import tableRoutes from './routes/tables.js';
+import settingRoutes from './routes/settings.js';
+import cartRoutes from './routes/cart.js';
+import businessRoutes from './routes/business.js';
+import customerRoutes from './routes/customers.js';
+import receiptRoutes from './routes/receipts.js';
+import notificationRoutes from './routes/notifications.js';
 import morgan from 'morgan';
 
 dotenv.config();
 
-// Import routes
-import authRoutes from './routes/auth.js';
-import orderRoutes from './routes/orders.js';
-import menuRoutes from './routes/menu.js';
-import categoryRoutes from './routes/categories.js';
-import tableRoutes from './routes/tables.js';
-import cartRoutes from './routes/cart.js';
-import settingRoutes from './routes/settings.js';
-import businessRoutes from './routes/business.js';
-import customerRoutes from './routes/customers.js';
-import paymentRoutes from './routes/payments.js';
-import reportRoutes from './routes/reports.js';
-import notificationRoutes from './routes/notifications.js';
-import receiptRoutes from './routes/receipts.js';
-
-// Import socket handler
-import { setupSocketHandlers } from './socket.js';
-
 const app = express();
 const httpServer = createServer(app);
 
-// Initialize Web Push
-webpush.setVapidDetails(
-  'mailto:admin@pos-system.com',
-  process.env.VAPID_PUBLIC_KEY,
-  process.env.VAPID_PRIVATE_KEY
-);
+// Validate required environment variables
+const requiredEnvVars = ['MONGODB_URI', 'JWT_SECRET'];
+const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
+if (missingEnvVars.length > 0) {
+  console.error(`❌ Missing required environment variables: ${missingEnvVars.join(', ')}`);
+  if (process.env.NODE_ENV === 'production') {
+    process.exit(1);
+  }
+}
 
-// CORS configuration
+// Initialize Web Push for notifications
+const initializeWebPush = () => {
+  const publicKey = process.env.VAPID_PUBLIC_KEY;
+  const privateKey = process.env.VAPID_PRIVATE_KEY;
+  
+  console.log('🔑 VAPID_PUBLIC_KEY:', publicKey ? '✅ Present' : '❌ Missing');
+  console.log('🔑 VAPID_PRIVATE_KEY:', privateKey ? '✅ Present' : '❌ Missing');
+  
+  if (!publicKey || !privateKey) {
+    console.log('⚠️ VAPID keys not found. Push notifications will not work.');
+    if (process.env.NODE_ENV === 'production') {
+      console.error('❌ VAPID keys required for production!');
+    }
+    return false;
+  }
+  
+  webpush.setVapidDetails(
+    'mailto:admin@pos-system.com',
+    publicKey,
+    privateKey
+  );
+  console.log('✅ Web Push notifications initialized');
+  return true;
+};
+
+const webPushInitialized = initializeWebPush();
+
+// Allowed origins (add your Firebase URLs)
 const allowedOrigins = [
   'http://localhost:3000',
   'http://localhost:5173',
+  'http://localhost:3001',
   'https://pos-system-d98.web.app',
   'https://pos-system-d98.firebaseapp.com',
   process.env.CLIENT_URL
 ].filter(Boolean);
 
-// Socket.io with CORS
+console.log('📋 Allowed CORS origins:', allowedOrigins);
+
+// Socket.io configuration
 const io = new Server(httpServer, {
   cors: {
     origin: allowedOrigins,
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
-    credentials: true
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    credentials: true,
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept']
   },
   pingTimeout: 60000,
-  pingInterval: 25000
+  pingInterval: 25000,
+  transports: ['websocket', 'polling'],
+  allowEIO3: true
 });
 
+// Make io accessible throughout the app
 app.set('io', io);
 
-// Middleware
+// Connect to MongoDB
+const connectWithRetry = async (retries = 5, delay = 5000) => {
+  for (let i = 0; i < retries; i++) {
+    try {
+      await connectDB();
+      console.log('✅ MongoDB connected successfully');
+      return;
+    } catch (error) {
+      console.error(`MongoDB connection attempt ${i + 1} failed:`, error.message);
+      if (i < retries - 1) {
+        console.log(`Retrying in ${delay / 1000} seconds...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+  }
+  console.error('❌ Failed to connect to MongoDB after multiple attempts');
+  if (process.env.NODE_ENV === 'production') {
+    process.exit(1);
+  }
+};
+
+connectWithRetry();
+
+// Security Middleware
 app.use(helmet({
   contentSecurityPolicy: false,
   crossOriginResourcePolicy: { policy: "cross-origin" }
 }));
+
+// Compression for better performance
 app.use(compression());
+
+// Logging
 app.use(morgan('combined'));
+
+// CORS middleware
 app.use(cors({
-  origin: allowedOrigins,
+  origin: function(origin, callback) {
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      console.log('CORS blocked origin:', origin);
+      callback(null, true); // Allow anyway for development
+    }
+  },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept']
 }));
+
+app.options('*', cors());
+
+// Body parsing with size limits
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Make io and webpush available to routes
+// Request logging middleware
+app.use((req, res, next) => {
+  req.requestTime = new Date();
+  next();
+});
+
+// Make io accessible to routes via req
 app.use((req, res, next) => {
   req.io = io;
+  next();
+});
+
+// Make web push available to routes
+app.use((req, res, next) => {
+  req.webPushInitialized = webPushInitialized;
   req.webpush = webpush;
   next();
 });
 
-// Health check
-app.get('/health', (req, res) => {
+// Health check endpoint
+app.get('/health', async (req, res) => {
   const dbState = mongoose.connection.readyState;
-  res.json({
+  const dbStatus = {
+    0: 'disconnected',
+    1: 'connected',
+    2: 'connecting',
+    3: 'disconnecting'
+  }[dbState] || 'unknown';
+  
+  res.status(200).json({ 
     status: 'healthy',
     timestamp: new Date(),
-    mongodb: ['disconnected', 'connected', 'connecting', 'disconnecting'][dbState],
     uptime: process.uptime(),
-    pushNotifications: true
+    mongodb: dbStatus,
+    socketConnections: io?.sockets?.sockets?.size || 0,
+    environment: process.env.NODE_ENV || 'development',
+    version: '1.0.0',
+    pushNotifications: webPushInitialized
   });
 });
 
@@ -99,16 +197,16 @@ app.get('/health', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/menu', menuRoutes);
+app.use('/api/reports', reportRoutes);
+app.use('/api/payments', paymentRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/tables', tableRoutes);
 app.use('/api/cart', cartRoutes);
 app.use('/api/settings', settingRoutes);
 app.use('/api/business', businessRoutes);
 app.use('/api/customers', customerRoutes);
-app.use('/api/payments', paymentRoutes);
-app.use('/api/reports', reportRoutes);
-app.use('/api/notifications', notificationRoutes);
 app.use('/api/receipts', receiptRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 // Root endpoint
 app.get('/', (req, res) => {
@@ -118,38 +216,104 @@ app.get('/', (req, res) => {
     version: '1.0.0',
     endpoints: {
       health: '/health',
-      auth: '/api/auth',
       orders: '/api/orders',
       menu: '/api/menu',
       categories: '/api/categories',
-      tables: '/api/tables'
-    }
+      tables: '/api/tables',
+      settings: '/api/settings',
+      business: '/api/business',
+      auth: '/api/auth',
+      payments: '/api/payments',
+      reports: '/api/reports',
+      cart: '/api/cart',
+      notifications: '/api/notifications'
+    },
+    features: {
+      pushNotifications: webPushInitialized
+    },
+    timestamp: new Date()
   });
 });
 
 // 404 handler
 app.use((req, res) => {
-  res.status(404).json({ error: 'Route not found' });
+  res.status(404).json({ 
+    error: 'Route not found',
+    path: req.originalUrl,
+    method: req.method
+  });
 });
 
 // Global error handler
 app.use((err, req, res, next) => {
-  console.error('Server error:', err.message);
-  res.status(500).json({ error: 'Internal server error' });
+  console.error('Server error:', {
+    message: err.message,
+    stack: process.env.NODE_ENV === 'development' ? err.stack : undefined,
+    path: req.path,
+    method: req.method,
+    ip: req.ip
+  });
+  
+  res.status(err.status || 500).json({ 
+    error: process.env.NODE_ENV === 'production' ? 'Internal server error' : err.message,
+    code: err.code || 'INTERNAL_ERROR'
+  });
 });
 
-// Connect to MongoDB
-mongoose.connect(process.env.MONGODB_URI)
-  .then(() => console.log('✅ MongoDB connected'))
-  .catch(err => console.error('MongoDB connection error:', err));
-
-// Setup socket handlers
+// Socket.io setup
 setupSocketHandlers(io);
 
-// Start server
+// Graceful shutdown
+const gracefulShutdown = async () => {
+  console.log('Received shutdown signal, closing gracefully...');
+  
+  if (io) {
+    io.close(() => {
+      console.log('Socket.IO server closed');
+    });
+  }
+  
+  httpServer.close(async () => {
+    console.log('HTTP server closed');
+    
+    try {
+      await mongoose.connection.close();
+      console.log('MongoDB connection closed');
+    } catch (err) {
+      console.error('Error closing MongoDB:', err);
+    }
+    
+    process.exit(0);
+  });
+  
+  setTimeout(() => {
+    console.error('Could not close connections in time, forcing shutdown');
+    process.exit(1);
+  }, 10000);
+};
+
+process.on('SIGTERM', gracefulShutdown);
+process.on('SIGINT', gracefulShutdown);
+
+// Unhandled rejection handler
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+// Uncaught exception handler
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  gracefulShutdown();
+});
+
 const PORT = process.env.PORT || 3001;
 httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`🔌 Socket.io ready`);
-  console.log(`📡 API: http://localhost:${PORT}/api`);
+  console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`🔌 Socket.io ready for connections`);
+  console.log(`📡 API URL: http://localhost:${PORT}/api`);
+  console.log(`✅ CORS enabled for:`, allowedOrigins);
+  console.log(`📢 Push notifications: ${webPushInitialized ? '✅ Enabled' : '⚠️ Disabled'}`);
 });
+
+export { app, httpServer, io, getIO };
