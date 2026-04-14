@@ -46,6 +46,103 @@ router.post('/login', async (req, res) => {
   }
 });
 
+// Setup first admin user (no auth required - only works if no admin exists)
+router.post('/setup-admin', async (req, res) => {
+  try {
+    const { username, email, password, restaurantName, restaurantAddress, restaurantPhone } = req.body;
+    
+    // Check if any admin already exists
+    const existingAdmin = await User.findOne({ role: 'admin' });
+    if (existingAdmin) {
+      return res.status(400).json({ error: 'Admin user already exists. Use login instead.' });
+    }
+    
+    // Validate input
+    if (!username || !email || !password) {
+      return res.status(400).json({ error: 'Username, email and password are required' });
+    }
+    
+    if (password.length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    }
+    
+    // Check if user already exists
+    const existingUser = await User.findOne({ $or: [{ email }, { username }] });
+    if (existingUser) {
+      return res.status(400).json({ error: 'User already exists' });
+    }
+    
+    // Create admin user
+    const user = new User({ 
+      username, 
+      email, 
+      password, 
+      role: 'admin',
+      active: true
+    });
+    await user.save();
+    
+    // Save business details if provided
+    if (restaurantName) {
+      try {
+        const BusinessDetail = await import('../models/BusinessDetail.js').then(m => m.default);
+        let business = await BusinessDetail.findOne({ key: 'business-details' });
+        
+        if (business) {
+          business.name = restaurantName;
+          business.address = restaurantAddress || business.address;
+          business.phone = restaurantPhone || business.phone;
+          await business.save();
+        } else {
+          business = new BusinessDetail({
+            key: 'business-details',
+            name: restaurantName,
+            address: restaurantAddress || '',
+            phone: restaurantPhone || '',
+            currencySymbol: '₹',
+            taxLabel: 'GST',
+            footerMessage: 'Thank you! Visit Again!'
+          });
+          await business.save();
+        }
+        console.log('Business details saved for admin setup');
+      } catch (err) {
+        console.error('Error saving business details:', err);
+        // Don't fail the whole request if business details save fails
+      }
+    }
+    
+    // Generate token for auto-login
+    const token = generateToken(user._id);
+    
+    res.status(201).json({
+      success: true,
+      message: 'Admin user created successfully',
+      token,
+      user: {
+        id: user._id,
+        username: user.username,
+        email: user.email,
+        role: user.role,
+        permissions: user.permissions
+      }
+    });
+  } catch (error) {
+    console.error('Error creating admin:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Check if admin exists (for setup page)
+router.get('/check-admin', async (req, res) => {
+  try {
+    const adminExists = await User.exists({ role: 'admin' });
+    res.json({ adminExists: !!adminExists });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.post('/register', authenticate, authorize('admin'), async (req, res) => {
   try {
     const { username, email, password, role } = req.body;
