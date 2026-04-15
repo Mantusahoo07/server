@@ -6,8 +6,9 @@ import {
   notifyKitchenNewOrder, 
   notifyKitchenOrderModified, 
   notifyKitchenInstantOrder,
-  notifyOrderReady,
-  notifyCancellationRequest
+  notifyCancellationRequest,
+  notifyAdminOrderReady,
+  notifyAdminItemReady
 } from './notifications.js';
 
 const router = express.Router();
@@ -128,16 +129,16 @@ router.post('/', authenticate, async (req, res) => {
         tableSessionId = table.currentSessionId;
         isAdditionalOrder = true;
         baseOrderNumber = table.baseOrderNumber;
-        runningNumber = table.runningOrderCount; // This will be 1, 2, 3, etc.
+        runningNumber = table.runningOrderCount;
         
         console.log(`📝 Additional order for table ${orderData.tableNumber}: baseOrderNumber=${baseOrderNumber}, runningNumber=${runningNumber}`);
       } else {
         // FIRST ORDER AFTER TABLE IS AVAILABLE - Start new session
         tableSessionId = generateTableSessionId(orderData.tableNumber);
         isAdditionalOrder = false;
-        runningNumber = 0; // First order has no suffix
+        runningNumber = 0;
         
-        // Generate NEW base order number (increment from last order overall)
+        // Generate NEW base order number
         const lastOrder = await Order.findOne().sort({ baseOrderNumber: -1 });
         baseOrderNumber = lastOrder ? lastOrder.baseOrderNumber + 1 : 1000000;
         
@@ -145,7 +146,7 @@ router.post('/', authenticate, async (req, res) => {
         table.currentSessionId = tableSessionId;
         table.baseOrderNumber = baseOrderNumber;
         table.status = 'running';
-        table.runningOrderCount = 1; // First order
+        table.runningOrderCount = 1;
         await table.save();
         
         console.log(`📝 NEW SESSION - First order for table ${orderData.tableNumber}: baseOrderNumber=${baseOrderNumber}`);
@@ -200,7 +201,7 @@ router.post('/', authenticate, async (req, res) => {
       io.emit('order-updated', savedOrder);
       io.emit('new-order-received', savedOrder);
       
-      // Send push notification to kitchen staff
+      // Send push notification to kitchen staff (only for new orders)
       await notifyKitchenNewOrder(savedOrder);
       
       if (orderData.orderType === 'dine-in' && orderData.tableNumber) {
@@ -437,8 +438,8 @@ router.patch('/:id/status', authenticate, async (req, res) => {
       if (status === 'accepted') io.emit('order-accepted', order._id);
       if (status === 'ready_for_billing') {
         io.emit('order-ready-for-billing', order._id);
-        // Send push notification for ready order
-        await notifyOrderReady(order);
+        // Send push notification to ADMIN (not kitchen)
+        await notifyAdminOrderReady(order);
       }
       if (status === 'completed') io.emit('order-completed', order._id);
       
@@ -484,6 +485,9 @@ router.patch('/:id/items/:itemId/status', authenticate, async (req, res) => {
       
       // Send push notification when item is marked ready
       if (status === 'completed' && oldStatus !== 'completed') {
+        // Send notification to ADMIN about item ready
+        await notifyAdminItemReady(order, item.name, item.quantity);
+        // Also notify kitchen about modification (keep this)
         await notifyKitchenOrderModified(order, order.isRunningOrder);
       }
     }
@@ -692,7 +696,7 @@ router.post('/:id/items/:itemId/request-cancellation', authenticate, async (req,
         requestedAt: item.cancellationRequestedAt
       });
       
-      // Send push notification for cancellation request
+      // Send push notification for cancellation request (to kitchen)
       await notifyCancellationRequest(order, item);
     }
     
