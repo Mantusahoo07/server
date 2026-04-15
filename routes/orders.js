@@ -200,7 +200,7 @@ router.post('/', authenticate, async (req, res) => {
       io.emit('order-updated', savedOrder);
       io.emit('new-order-received', savedOrder);
       
-      // Send push notification to kitchen staff (only for new orders)
+      // KITCHEN NOTIFICATION: New order received
       await notifyKitchenNewOrder(savedOrder);
       
       if (orderData.orderType === 'dine-in' && orderData.tableNumber) {
@@ -251,11 +251,17 @@ router.post('/:id/items', authenticate, async (req, res) => {
     };
     
     const existingItem = order.items.find(i => i.id === newItem.id);
+    let modificationType = 'item_added';
+    let quantityChange = newItem.quantity;
+    
     if (existingItem) {
-      existingItem.oldQuantity = existingItem.quantity;
+      const oldQuantity = existingItem.quantity;
+      existingItem.oldQuantity = oldQuantity;
       existingItem.quantity += newItem.quantity;
       existingItem.isModified = true;
       existingItem.modifiedAt = new Date();
+      quantityChange = existingItem.quantity - oldQuantity;
+      modificationType = quantityChange > 0 ? 'quantity_increased' : 'quantity_decreased';
     } else {
       order.items.push(newItem);
     }
@@ -284,8 +290,8 @@ router.post('/:id/items', authenticate, async (req, res) => {
         newQuantity: newItem.quantity
       });
       
-      // Send push notification to kitchen staff about modification
-      await notifyKitchenOrderModified(order, order.isRunningOrder);
+      // KITCHEN NOTIFICATION: Order modified (item added or quantity changed)
+      await notifyKitchenOrderModified(order, modificationType, newItem.name, Math.abs(quantityChange));
     }
     
     res.json(order);
@@ -330,8 +336,8 @@ router.delete('/:id/items/:itemId', authenticate, async (req, res) => {
         removedItem: removedItem?.name
       });
       
-      // Send push notification to kitchen staff about modification
-      await notifyKitchenOrderModified(order, order.isRunningOrder);
+      // KITCHEN NOTIFICATION: Item removed from order
+      await notifyKitchenOrderModified(order, 'item_removed', removedItem?.name, removedItem?.quantity);
     }
     
     res.json(order);
@@ -357,6 +363,9 @@ router.patch('/:id/items/:itemId', authenticate, async (req, res) => {
     }
     
     const oldQuantity = item.quantity;
+    const modificationType = quantity > oldQuantity ? 'quantity_increased' : 'quantity_decreased';
+    const quantityChange = Math.abs(quantity - oldQuantity);
+    
     item.oldQuantity = oldQuantity;
     item.quantity = quantity;
     item.isModified = true;
@@ -392,8 +401,8 @@ router.patch('/:id/items/:itemId', authenticate, async (req, res) => {
         newQuantity: quantity
       });
       
-      // Send push notification to kitchen staff about modification
-      await notifyKitchenOrderModified(order, order.isRunningOrder);
+      // KITCHEN NOTIFICATION: Quantity changed
+      await notifyKitchenOrderModified(order, modificationType, item.name, quantityChange);
     }
     
     res.json(order);
@@ -437,8 +446,13 @@ router.patch('/:id/status', authenticate, async (req, res) => {
       if (status === 'accepted') io.emit('order-accepted', order._id);
       if (status === 'ready_for_billing') {
         io.emit('order-ready-for-billing', order._id);
-        // Send push notification to ADMIN (not kitchen)
+        // ADMIN NOTIFICATION: Order ready for billing
         await notifyAdminOrderReady(order);
+      }
+      if (status === 'cancelled') {
+        io.emit('order-cancelled', order._id);
+        // KITCHEN NOTIFICATION: Order cancelled
+        await notifyKitchenOrderCancelled(order);
       }
       if (status === 'completed') io.emit('order-completed', order._id);
       
@@ -482,12 +496,9 @@ router.patch('/:id/items/:itemId/status', authenticate, async (req, res) => {
       io.emit('order-updated', order);
       io.emit('item-status-updated', { orderId: order._id, itemId: req.params.itemId, status, oldStatus });
       
-      // Send push notification when item is marked ready
+      // ADMIN NOTIFICATION: Item marked ready (only when status changes to completed)
       if (status === 'completed' && oldStatus !== 'completed') {
-        // Send notification to ADMIN about item ready
         await notifyAdminItemReady(order, item.name, item.quantity);
-        // Also notify kitchen about modification (keep this)
-        await notifyKitchenOrderModified(order, order.isRunningOrder);
       }
     }
     
@@ -695,8 +706,8 @@ router.post('/:id/items/:itemId/request-cancellation', authenticate, async (req,
         requestedAt: item.cancellationRequestedAt
       });
       
-      // Send push notification for cancellation request (to kitchen)
-      await notifyCancellationRequest(order, item);
+      // NOTE: Cancellation request notification goes to POS/Admin, not kitchen
+      // This is handled separately in the frontend
     }
     
     res.json({ message: 'Cancellation request sent', item });
