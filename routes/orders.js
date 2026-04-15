@@ -3,12 +3,11 @@ import Order from '../models/Order.js';
 import Table from '../models/Table.js';
 import { authenticate } from '../middleware/auth.js';
 import { 
-  notifyKitchenNewOrder, 
-  notifyKitchenOrderModified, 
-  notifyKitchenInstantOrder,
-  notifyCancellationRequest,
-  notifyAdminOrderReady,
-  notifyAdminItemReady
+  notifyKitchenNewOrder,
+  notifyKitchenOrderModified,
+  notifyKitchenOrderCancelled,
+  notifyAdminItemReady,
+  notifyAdminOrderReady
 } from './notifications.js';
 
 const router = express.Router();
