@@ -1,5 +1,3 @@
-// server-main/routes/notifications.js
-
 import express from 'express';
 import webpush from 'web-push';
 import { authenticate } from '../middleware/auth.js';
@@ -56,19 +54,29 @@ router.post('/subscribe', authenticate, async (req, res) => {
       roleSubscriptions.get('kitchen').add(userId.toString());
       console.log(`✅ Kitchen user ${user.username} subscribed to notifications`);
       console.log(`📊 Total kitchen subscribers: ${roleSubscriptions.get('kitchen').size}`);
+    }
+    
+    // Add admin subscriptions
+    if (user.role === 'admin') {
+      if (!roleSubscriptions.has('admin')) {
+        roleSubscriptions.set('admin', new Set());
+      }
+      roleSubscriptions.get('admin').add(userId.toString());
+      console.log(`✅ Admin user ${user.username} subscribed to notifications`);
+      console.log(`📊 Total admin subscribers: ${roleSubscriptions.get('admin').size}`);
       
-      // Send a welcome notification
+      // Send welcome notification to admin
       const welcomePayload = JSON.stringify({
-        title: '🔔 Kitchen Notifications Active',
-        body: 'You will now receive real-time order updates!',
+        title: '🔔 Admin Notifications Active',
+        body: 'You will receive order ready and item ready alerts!',
         icon: '/icon-192.png',
-        tag: 'kitchen-welcome',
+        tag: 'admin-welcome',
         sound: '/sounds/new-dine-in.mp3'
       });
       
       try {
         await webpush.sendNotification(subscription, welcomePayload);
-        console.log('✅ Welcome notification sent to kitchen user');
+        console.log('✅ Welcome notification sent to admin user');
       } catch (err) {
         console.error('Error sending welcome notification:', err.message);
       }
@@ -77,7 +85,8 @@ router.post('/subscribe', authenticate, async (req, res) => {
     res.json({ 
       success: true, 
       role: user.role,
-      kitchenSubscribers: roleSubscriptions.get('kitchen')?.size || 0
+      kitchenSubscribers: roleSubscriptions.get('kitchen')?.size || 0,
+      adminSubscribers: roleSubscriptions.get('admin')?.size || 0
     });
   } catch (error) {
     console.error('Error subscribing:', error);
@@ -98,6 +107,12 @@ router.post('/unsubscribe', authenticate, async (req, res) => {
           kitchenSet.delete(userId.toString());
         }
       }
+      if (userInfo.userRole === 'admin') {
+        const adminSet = roleSubscriptions.get('admin');
+        if (adminSet) {
+          adminSet.delete(userId.toString());
+        }
+      }
       subscriptions.delete(userId.toString());
       console.log(`❌ User ${userId} unsubscribed`);
     }
@@ -116,11 +131,9 @@ const notifyKitchenStaff = async (title, body, sound, orderId, extraData = {}) =
   console.log(`📨 Kitchen subscribers count: ${kitchenSubscribers?.size || 0}`);
   console.log(`📨 Title: ${title}`);
   console.log(`📨 Body: ${body}`);
-  console.log(`📨 Sound: ${sound}`);
   
   if (!kitchenSubscribers || kitchenSubscribers.size === 0) {
     console.log('❌ No kitchen staff subscribed to notifications');
-    console.log('📊 Current role subscriptions:', Array.from(roleSubscriptions.keys()));
     return { success: false, sent: 0 };
   }
   
@@ -130,8 +143,6 @@ const notifyKitchenStaff = async (title, body, sound, orderId, extraData = {}) =
   } else if (!sound) {
     soundPath = '/sounds/new-dine-in.mp3';
   }
-  
-  console.log(`🔊 Sound path: ${soundPath}`);
   
   const payload = JSON.stringify({
     title: title,
@@ -158,9 +169,9 @@ const notifyKitchenStaff = async (title, body, sound, orderId, extraData = {}) =
       try {
         await webpush.sendNotification(userInfo.subscription, payload);
         sent++;
-        console.log(`✅ Notification sent to ${userInfo.username} (${userId})`);
+        console.log(`✅ Notification sent to kitchen ${userInfo.username} (${userId})`);
       } catch (error) {
-        console.error(`❌ Failed to send to ${userId}:`, error.message);
+        console.error(`❌ Failed to send to kitchen ${userId}:`, error.message);
         failed++;
         if (error.statusCode === 410) {
           console.log(`Removing expired subscription for ${userId}`);
@@ -171,7 +182,69 @@ const notifyKitchenStaff = async (title, body, sound, orderId, extraData = {}) =
     }
   }
   
-  console.log(`📊 Result: ${sent} sent, ${failed} failed`);
+  console.log(`📊 Kitchen notification result: ${sent} sent, ${failed} failed`);
+  return { success: true, sent, failed };
+};
+
+// Send notification to admins
+const notifyAdmins = async (title, body, sound, orderId, extraData = {}) => {
+  const adminSubscribers = roleSubscriptions.get('admin');
+  
+  console.log(`📨 Admin subscribers count: ${adminSubscribers?.size || 0}`);
+  console.log(`📨 Title: ${title}`);
+  console.log(`📨 Body: ${body}`);
+  
+  if (!adminSubscribers || adminSubscribers.size === 0) {
+    console.log('❌ No admin subscribed to notifications');
+    return { success: false, sent: 0 };
+  }
+  
+  let soundPath = sound;
+  if (sound && !sound.includes('/sounds/')) {
+    soundPath = `/sounds/${sound}.mp3`;
+  } else if (!sound) {
+    soundPath = '/sounds/new-dine-in.mp3';
+  }
+  
+  const payload = JSON.stringify({
+    title: title,
+    body: body,
+    icon: '/icon-192.png',
+    badge: '/icon-96.png',
+    tag: `admin-${orderId || Date.now()}`,
+    sound: soundPath,
+    data: { 
+      url: '/orders', 
+      orderId, 
+      ...extraData 
+    },
+    vibrate: [500, 200, 500],
+    requireInteraction: true
+  });
+  
+  let sent = 0;
+  let failed = 0;
+  
+  for (const userId of adminSubscribers) {
+    const userInfo = subscriptions.get(userId);
+    if (userInfo && userInfo.subscription) {
+      try {
+        await webpush.sendNotification(userInfo.subscription, payload);
+        sent++;
+        console.log(`✅ Notification sent to admin ${userInfo.username} (${userId})`);
+      } catch (error) {
+        console.error(`❌ Failed to send to admin ${userId}:`, error.message);
+        failed++;
+        if (error.statusCode === 410) {
+          console.log(`Removing expired subscription for ${userId}`);
+          subscriptions.delete(userId);
+          adminSubscribers.delete(userId);
+        }
+      }
+    }
+  }
+  
+  console.log(`📊 Admin notification result: ${sent} sent, ${failed} failed`);
   return { success: true, sent, failed };
 };
 
@@ -215,7 +288,7 @@ export const notifyKitchenNewOrder = async (order) => {
       body = `Order #${orderNumber}`;
   }
   
-  console.log(`📤 Sending notification: ${title}`);
+  console.log(`📤 Sending notification to kitchen: ${title}`);
   const result = await notifyKitchenStaff(title, body, soundFile, order._id, {
     orderType: order.orderType,
     tableNumber: order.tableNumber,
@@ -251,15 +324,6 @@ export const notifyKitchenInstantOrder = async (order) => {
   return await notifyKitchenStaff(title, body, soundFile, order._id, { urgent: true });
 };
 
-// Kitchen notification for order ready (for billing)
-export const notifyOrderReady = async (order) => {
-  const soundFile = 'order-ready';
-  const title = '💰 Order Ready for Billing';
-  const body = `Order #${order.displayOrderNumber || order.orderNumber} is ready for payment`;
-  
-  return await notifyKitchenStaff(title, body, soundFile, order._id);
-};
-
 // Kitchen notification for cancellation request
 export const notifyCancellationRequest = async (order, item) => {
   const soundFile = 'cancellation-request';
@@ -269,10 +333,30 @@ export const notifyCancellationRequest = async (order, item) => {
   return await notifyKitchenStaff(title, body, soundFile, order._id, { itemName: item.name });
 };
 
+// Admin notification for order ready for billing
+export const notifyAdminOrderReady = async (order) => {
+  const soundFile = 'order-ready';
+  const title = '💰 Order Ready for Billing';
+  const body = `Order #${order.displayOrderNumber || order.orderNumber} is ready for payment`;
+  
+  console.log(`📤 Sending order ready notification to admin for order: ${order.displayOrderNumber || order.orderNumber}`);
+  return await notifyAdmins(title, body, soundFile, order._id);
+};
+
+// Admin notification for item marked ready
+export const notifyAdminItemReady = async (order, itemName, itemQuantity) => {
+  const soundFile = 'order-ready';
+  const title = '✅ Item Ready';
+  const body = `${itemQuantity}× ${itemName} is ready for Order #${order.displayOrderNumber || order.orderNumber}`;
+  
+  console.log(`📤 Sending item ready notification to admin: ${itemQuantity}× ${itemName}`);
+  return await notifyAdmins(title, body, soundFile, order._id, { itemName, itemQuantity });
+};
+
 // Test endpoint
 router.post('/test-kitchen', authenticate, async (req, res) => {
   try {
-    console.log('🔔 Test notification requested');
+    console.log('🔔 Test kitchen notification requested');
     const result = await notifyKitchenStaff(
       '🔔 Test Kitchen Notification',
       'This is a test notification for kitchen staff!',
@@ -287,10 +371,29 @@ router.post('/test-kitchen', authenticate, async (req, res) => {
   }
 });
 
+// Test admin notification endpoint
+router.post('/test-admin', authenticate, async (req, res) => {
+  try {
+    console.log('🔔 Test admin notification requested');
+    const result = await notifyAdmins(
+      '🔔 Test Admin Notification',
+      'This is a test notification for admin!',
+      'order-ready',
+      null,
+      { test: true }
+    );
+    res.json({ success: true, result });
+  } catch (error) {
+    console.error('Test error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Stats endpoint
 router.get('/stats', authenticate, async (req, res) => {
   try {
     const kitchenSubscribers = roleSubscriptions.get('kitchen') || new Set();
+    const adminSubscribers = roleSubscriptions.get('admin') || new Set();
     const subscribers = [];
     
     for (const userId of kitchenSubscribers) {
@@ -305,14 +408,28 @@ router.get('/stats', authenticate, async (req, res) => {
       }
     }
     
+    for (const userId of adminSubscribers) {
+      const info = subscriptions.get(userId);
+      if (info && !subscribers.find(s => s.userId === userId)) {
+        subscribers.push({
+          userId,
+          username: info.username,
+          role: info.userRole,
+          subscribedAt: info.subscribedAt
+        });
+      }
+    }
+    
     res.json({
       webPushConfigured: !!process.env.VAPID_PUBLIC_KEY,
       kitchenSubscribersCount: kitchenSubscribers.size,
+      adminSubscribersCount: adminSubscribers.size,
       subscribers: subscribers,
       totalSubscriptions: subscriptions.size,
       allRoles: Array.from(roleSubscriptions.keys()).map(r => ({ role: r, count: roleSubscriptions.get(r).size }))
     });
   } catch (error) {
+    console.error('Error getting stats:', error);
     res.status(500).json({ error: error.message });
   }
 });
