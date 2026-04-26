@@ -93,6 +93,135 @@ router.get('/:id', authenticate, async (req, res) => {
   }
 });
 
+// UPDATE ORDER - For changing order type, table number, delivery platform
+router.patch('/:id', authenticate, async (req, res) => {
+  try {
+    const { orderType, tableNumber, deliveryPlatform } = req.body;
+    const order = await Order.findById(req.params.id);
+    
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    
+    console.log(`Updating order ${order.displayOrderNumber}:`, { orderType, tableNumber, deliveryPlatform });
+    
+    // Update order type if provided
+    if (orderType && orderType !== order.orderType) {
+      order.orderType = orderType;
+      
+      // Clear irrelevant fields based on new order type
+      if (orderType === 'dine-in') {
+        if (tableNumber !== undefined) {
+          order.tableNumber = parseInt(tableNumber);
+        }
+        order.deliveryPlatform = null;
+      } else if (orderType === 'takeaway') {
+        order.tableNumber = null;
+        order.deliveryPlatform = null;
+      } else if (orderType === 'delivery') {
+        order.tableNumber = null;
+        if (deliveryPlatform) {
+          order.deliveryPlatform = deliveryPlatform;
+        }
+      }
+    } else {
+      // If only table number changed for dine-in
+      if (tableNumber !== undefined && order.orderType === 'dine-in') {
+        order.tableNumber = parseInt(tableNumber);
+      }
+      
+      // If only delivery platform changed for delivery
+      if (deliveryPlatform !== undefined && order.orderType === 'delivery') {
+        order.deliveryPlatform = deliveryPlatform;
+      }
+    }
+    
+    order.updatedAt = new Date();
+    await order.save();
+    
+    console.log(`Order ${order.displayOrderNumber} updated successfully`);
+    
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('order-updated', order);
+    }
+    
+    res.json(order);
+  } catch (error) {
+    console.error('Error updating order:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// CHANGE PAYMENT METHOD - For completed orders
+router.patch('/:id/change-payment', authenticate, async (req, res) => {
+  try {
+    const { paymentMethod, reason } = req.body;
+    const order = await Order.findById(req.params.id);
+    
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    
+    // Validate payment method
+    const validMethods = ['cash', 'card', 'upi', 'credit'];
+    if (!validMethods.includes(paymentMethod)) {
+      return res.status(400).json({ error: 'Invalid payment method' });
+    }
+    
+    const oldMethod = order.payment?.method || 'pending';
+    const oldStatus = order.payment?.status;
+    
+    // Update payment method
+    order.payment = {
+      ...order.payment,
+      method: paymentMethod,
+      status: paymentMethod === 'credit' ? 'credit_due' : 'completed',
+      timestamp: new Date(),
+      notes: order.payment?.notes 
+        ? `${order.payment.notes}\nPayment method changed from ${oldMethod} to ${paymentMethod}. Reason: ${reason || 'Manual correction'}`
+        : `Payment method changed from ${oldMethod} to ${paymentMethod}. Reason: ${reason || 'Manual correction'}`
+    };
+    
+    order.updatedAt = new Date();
+    await order.save();
+    
+    console.log(`Payment method changed for Order ${order.displayOrderNumber}: ${oldMethod} -> ${paymentMethod}`);
+    
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('order-updated', order);
+    }
+    
+    res.json(order);
+  } catch (error) {
+    console.error('Error changing payment method:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// CREDIT LEDGER - Get all credit due orders for a customer
+router.get('/credit-ledger/:customerId', authenticate, async (req, res) => {
+  try {
+    const { customerId } = req.params;
+    
+    const orders = await Order.find({
+      'payment.method': 'credit',
+      'payment.status': 'credit_due',
+      $or: [
+        { 'payment.customerId': customerId },
+        { 'payment.customerName': { $regex: customerId, $options: 'i' } }
+      ],
+      status: { $ne: 'cancelled' }
+    }).sort({ createdAt: -1 });
+    
+    res.json(orders);
+  } catch (error) {
+    console.error('Error fetching credit ledger:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Create new order
 router.post('/', authenticate, async (req, res) => {
   try {
@@ -406,11 +535,16 @@ router.patch('/:id/items/:itemId', authenticate, async (req, res) => {
 // Update order status
 router.patch('/:id/status', authenticate, async (req, res) => {
   try {
-    const { status } = req.body;
+    const { status, deliveryPlatform } = req.body;
     const updateData = { 
       status, 
       updatedAt: new Date() 
     };
+    
+    // If delivery platform is provided, update it
+    if (deliveryPlatform !== undefined && deliveryPlatform !== null) {
+      updateData.deliveryPlatform = deliveryPlatform;
+    }
     
     if (status === 'completed') {
       updateData.completedAt = new Date();
@@ -513,7 +647,8 @@ router.patch('/:id/complete-payment', authenticate, async (req, res) => {
       timestamp: new Date(),
       dueDate: paymentDetails.dueDate,
       customerName: paymentDetails.customerName,
-      customerPhone: paymentDetails.customerPhone
+      customerPhone: paymentDetails.customerPhone,
+      splitDetails: paymentDetails.splitDetails || null
     };
     
     if (status) order.status = status;
@@ -615,7 +750,8 @@ router.post('/:id/credit-sale', authenticate, async (req, res) => {
       timestamp: new Date(),
       dueDate: dueDate ? new Date(dueDate) : null,
       customerName: customerName,
-      customerPhone: customerPhone
+      customerPhone: customerPhone,
+      customerId: order.customer?._id
     };
     
     order.status = 'completed';
