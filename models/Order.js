@@ -26,6 +26,14 @@ const orderItemSchema = new mongoose.Schema({
   cancellationApprovedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
 });
 
+// Split payment schema
+const splitPaymentSchema = new mongoose.Schema({
+  method: { type: String, enum: ['cash', 'card', 'upi'] },
+  amount: { type: Number, default: 0 },
+  transactionId: String,
+  timestamp: Date
+});
+
 const orderSchema = new mongoose.Schema({
   baseOrderNumber: { type: Number, required: true },
   runningNumber: { type: Number, default: 0 },
@@ -72,7 +80,7 @@ const orderSchema = new mongoose.Schema({
   payment: {
     method: {
       type: String,
-      enum: [null, 'cash', 'card', 'upi', 'credit', 'pending'],
+      enum: [null, 'cash', 'card', 'upi', 'credit', 'split', 'pending'],
       default: null
     },
     status: {
@@ -85,7 +93,11 @@ const orderSchema = new mongoose.Schema({
     timestamp: Date,
     dueDate: Date,
     customerName: String,
-    customerPhone: String
+    customerPhone: String,
+    gatewayCharges: { type: Number, default: 0 },
+    change: { type: Number, default: 0 },
+    splitDetails: [splitPaymentSchema],
+    notes: String
   },
   taxRate: { type: Number, default: 0 },
   serviceChargeRate: { type: Number, default: 0 },
