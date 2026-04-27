@@ -170,13 +170,12 @@ router.patch('/:id/change-payment', authenticate, async (req, res) => {
     }
     
     const oldMethod = order.payment?.method || 'pending';
-    const oldStatus = order.payment?.status;
     
     // Update payment method
     order.payment = {
       ...order.payment,
       method: paymentMethod,
-      status: paymentMethod === 'credit' ? 'credit_due' : 'completed',
+      status: paymentMethod === 'credit' ? 'credit_due' : 'paid',
       timestamp: new Date(),
       notes: order.payment?.notes 
         ? `${order.payment.notes}\nPayment method changed from ${oldMethod} to ${paymentMethod}. Reason: ${reason || 'Manual correction'}`
@@ -257,16 +256,16 @@ router.post('/', authenticate, async (req, res) => {
         tableSessionId = table.currentSessionId;
         isAdditionalOrder = true;
         baseOrderNumber = table.baseOrderNumber;
-        runningNumber = table.runningOrderCount; // This will be 1, 2, 3, etc.
+        runningNumber = table.runningOrderCount;
         
         console.log(`📝 Additional order for table ${orderData.tableNumber}: baseOrderNumber=${baseOrderNumber}, runningNumber=${runningNumber}`);
       } else {
         // FIRST ORDER AFTER TABLE IS AVAILABLE - Start new session
         tableSessionId = generateTableSessionId(orderData.tableNumber);
         isAdditionalOrder = false;
-        runningNumber = 0; // First order has no suffix
+        runningNumber = 0;
         
-        // Generate NEW base order number (increment from last order overall)
+        // Generate NEW base order number
         const lastOrder = await Order.findOne().sort({ baseOrderNumber: -1 });
         baseOrderNumber = lastOrder ? lastOrder.baseOrderNumber + 1 : 1000000;
         
@@ -274,7 +273,7 @@ router.post('/', authenticate, async (req, res) => {
         table.currentSessionId = tableSessionId;
         table.baseOrderNumber = baseOrderNumber;
         table.status = 'running';
-        table.runningOrderCount = 1; // First order
+        table.runningOrderCount = 1;
         await table.save();
         
         console.log(`📝 NEW SESSION - First order for table ${orderData.tableNumber}: baseOrderNumber=${baseOrderNumber}`);
@@ -571,7 +570,6 @@ router.patch('/:id/status', authenticate, async (req, res) => {
       if (status === 'accepted') io.emit('order-accepted', order._id);
       if (status === 'ready_for_billing') {
         io.emit('order-ready-for-billing', order._id);
-        // Send push notification for ready order
         await notifyOrderReady(order);
       }
       if (status === 'completed') io.emit('order-completed', order._id);
@@ -616,7 +614,6 @@ router.patch('/:id/items/:itemId/status', authenticate, async (req, res) => {
       io.emit('order-updated', order);
       io.emit('item-status-updated', { orderId: order._id, itemId: req.params.itemId, status, oldStatus });
       
-      // Send push notification when item is marked ready
       if (status === 'completed' && oldStatus !== 'completed') {
         await notifyKitchenOrderModified(order, order.isRunningOrder);
       }
@@ -629,7 +626,7 @@ router.patch('/:id/items/:itemId/status', authenticate, async (req, res) => {
   }
 });
 
-// Complete payment
+// Complete payment - UPDATED with proper split payment handling
 router.patch('/:id/complete-payment', authenticate, async (req, res) => {
   try {
     const { paymentMethod, paymentDetails, status, completedAt } = req.body;
@@ -639,17 +636,63 @@ router.patch('/:id/complete-payment', authenticate, async (req, res) => {
       return res.status(404).json({ error: 'Order not found' });
     }
     
-    order.payment = {
-      method: paymentMethod,
-      status: paymentMethod === 'credit' ? 'credit_due' : 'paid',
-      amount: paymentDetails.amount,
-      transactionId: paymentDetails.transactionId,
-      timestamp: new Date(),
-      dueDate: paymentDetails.dueDate,
-      customerName: paymentDetails.customerName,
-      customerPhone: paymentDetails.customerPhone,
-      splitDetails: paymentDetails.splitDetails || null
-    };
+    console.log('Processing payment for order:', order.displayOrderNumber);
+    console.log('Payment method:', paymentMethod);
+    console.log('Payment details:', paymentDetails);
+    
+    // Handle split payment
+    if (paymentMethod === 'split' && paymentDetails.splitDetails && paymentDetails.splitDetails.length > 0) {
+      const splitDetails = paymentDetails.splitDetails;
+      const totalAmount = paymentDetails.amount;
+      
+      // Create individual payment records for each split method
+      const splitRecords = splitDetails.map(p => ({
+        method: p.method,
+        amount: p.amount,
+        transactionId: paymentDetails.transactionId,
+        timestamp: new Date()
+      }));
+      
+      order.payment = {
+        method: 'split',
+        status: 'paid',
+        amount: totalAmount,
+        transactionId: paymentDetails.transactionId,
+        timestamp: new Date(),
+        splitDetails: splitRecords,
+        note: `Split payment: ${splitRecords.map(s => `${s.method.toUpperCase()}: ₹${s.amount}`).join(', ')}`
+      };
+      
+      console.log(`✅ Split payment processed: ${splitRecords.map(s => `${s.method}: ₹${s.amount}`).join(', ')}`);
+    } 
+    // Handle credit payment
+    else if (paymentMethod === 'credit') {
+      order.payment = {
+        method: 'credit',
+        status: 'credit_due',
+        amount: paymentDetails.amount,
+        transactionId: paymentDetails.transactionId || `CREDIT_${Date.now()}`,
+        timestamp: new Date(),
+        dueDate: paymentDetails.dueDate,
+        customerName: paymentDetails.customerName,
+        customerPhone: paymentDetails.customerPhone,
+        notes: paymentDetails.notes
+      };
+      console.log(`✅ Credit sale recorded for ${paymentDetails.customerName}: ₹${paymentDetails.amount}`);
+    }
+    // Handle regular payments (cash, card, upi)
+    else {
+      order.payment = {
+        method: paymentMethod,
+        status: 'paid',
+        amount: paymentDetails.amount,
+        transactionId: paymentDetails.transactionId || `${paymentMethod.toUpperCase()}_${Date.now()}`,
+        timestamp: new Date(),
+        gatewayCharges: paymentDetails.gatewayCharges || 0,
+        change: paymentDetails.change || 0
+      };
+      console.log(`✅ ${paymentMethod.toUpperCase()} payment processed: ₹${paymentDetails.amount}`);
+    }
     
     if (status) order.status = status;
     if (completedAt) order.completedAt = new Date(completedAt);
