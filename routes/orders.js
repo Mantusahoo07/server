@@ -293,10 +293,10 @@ router.get('/credit-customers', authenticate, async (req, res) => {
   }
 });
 
-// PROCESS CREDIT COLLECTION - Partial payment collection
+// PROCESS CREDIT COLLECTION - Partial payment collection (FIXED)
 router.post('/credit-collection', authenticate, async (req, res) => {
   try {
-    const { customerId, amount, paymentMethod, note, collectedBy } = req.body;
+    const { customerId, customerName, amount, paymentMethod, note, collectedBy } = req.body;
     
     if (!customerId || !amount || amount <= 0) {
       return res.status(400).json({ error: 'Invalid request' });
@@ -305,9 +305,9 @@ router.post('/credit-collection', authenticate, async (req, res) => {
     // Find all credit orders for this customer that are still due
     const creditOrders = await Order.find({
       $or: [
-        { 'customer.name': customerId },
+        { 'customer.name': customerName },
         { 'customer._id': customerId },
-        { 'payment.customerName': customerId },
+        { 'payment.customerName': customerName },
         { 'payment.customerId': customerId }
       ],
       'payment.method': 'credit',
@@ -340,7 +340,7 @@ router.post('/credit-collection', authenticate, async (req, res) => {
           status: 'fully_paid' 
         });
       } else {
-        // Partial payment - update order total
+        // Partial payment - update order total CORRECTLY
         const newTotal = orderDue - remainingAmount;
         
         // Create a record of partial payment
@@ -355,6 +355,7 @@ router.post('/credit-collection', authenticate, async (req, res) => {
           collectedBy: collectedBy
         });
         
+        // Update order total correctly
         order.total = newTotal;
         order.subtotal = newTotal - (order.tax + order.serviceCharge);
         order.payment.amount = newTotal;
@@ -373,9 +374,9 @@ router.post('/credit-collection', authenticate, async (req, res) => {
       await order.save();
     }
     
-    const io = req.app.get('io');
+    const io = req.app?.get('io');
     if (io) {
-      io.emit('credit-collection-updated', { customerId, amount, updatedOrders });
+      io.emit('credit-collection-updated', { customerId, customerName, amount, updatedOrders });
     }
     
     res.json({
