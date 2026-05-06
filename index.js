@@ -95,12 +95,167 @@ const io = new Server(httpServer, {
 // Make io accessible throughout the app
 app.set('io', io);
 
+// ============================================
+// 🔥 DATABASE KEEP-ALIVE & WARM-UP SYSTEM
+// ============================================
+
+let dbKeepAliveInterval = null;
+let dbWarmUpCompleted = false;
+
+// Function to ping database and keep connection alive
+const setupDatabaseKeepAlive = () => {
+  if (dbKeepAliveInterval) {
+    clearInterval(dbKeepAliveInterval);
+  }
+  
+  // Ping database every 3 minutes to prevent MongoDB Atlas idle timeout
+  dbKeepAliveInterval = setInterval(async () => {
+    try {
+      if (mongoose.connection.readyState === 1) { // 1 = connected
+        // Simple ping command to keep connection alive
+        await mongoose.connection.db.admin().command({ ping: 1 });
+        console.log(`💓 Database keep-alive ping at ${new Date().toLocaleTimeString()}`);
+      }
+    } catch (error) {
+      console.error('❌ Database keep-alive ping failed:', error.message);
+    }
+  }, 3 * 60 * 1000); // Every 3 minutes (MongoDB Atlas free tier idle timeout is ~5 mins)
+  
+  console.log('🔥 Database keep-alive service started (ping every 3 minutes)');
+};
+
+// Function to pre-warm database collections
+const warmupDatabase = async () => {
+  if (dbWarmUpCompleted) return;
+  
+  console.log('🔥 Starting database warm-up...');
+  const startTime = Date.now();
+  
+  // List of collections to warm up (use the actual collection names from MongoDB)
+  const collections = [
+    { name: 'menuitems', model: menuItemsModel },
+    { name: 'categories', model: categoryModel },
+    { name: 'orders', model: orderModel },
+    { name: 'tables', model: tableModel },
+    { name: 'settings', model: settingModel },
+    { name: 'users', model: userModel },
+    { name: 'businessdetails', model: businessDetailModel }
+  ];
+  
+  // Load models dynamically
+  let menuItemsModel, categoryModel, orderModel, tableModel, settingModel, userModel, businessDetailModel;
+  
+  try {
+    menuItemsModel = (await import('./models/MenuItem.js')).default;
+    categoryModel = (await import('./models/Category.js')).default;
+    orderModel = (await import('./models/Order.js')).default;
+    tableModel = (await import('./models/Table.js')).default;
+    settingModel = (await import('./models/Setting.js')).default;
+    userModel = (await import('./models/User.js')).default;
+    businessDetailModel = (await import('./models/BusinessDetail.js')).default;
+  } catch (error) {
+    console.log('⚠️ Could not load all models for warm-up:', error.message);
+  }
+  
+  // Run lightweight queries to warm up each collection
+  for (const collection of collections) {
+    try {
+      if (collection.model) {
+        // Use estimatedDocumentCount for fast warm-up (doesn't scan documents)
+        const count = await collection.model.estimatedDocumentCount();
+        console.log(`✅ Warmed up ${collection.name} collection (${count} documents)`);
+      } else if (mongoose.connection.db) {
+        // Fallback to native driver
+        const count = await mongoose.connection.db.collection(collection.name).estimatedDocumentCount();
+        console.log(`✅ Warmed up ${collection.name} collection (${count} documents)`);
+      }
+    } catch (error) {
+      console.log(`⚠️ Could not warm up ${collection.name}:`, error.message);
+    }
+  }
+  
+  dbWarmUpCompleted = true;
+  const duration = Date.now() - startTime;
+  console.log(`🔥 Database warm-up completed in ${duration}ms`);
+};
+
+// Function to pre-fetch frequently accessed data into memory cache
+const preloadCache = async () => {
+  console.log('📦 Preloading frequently accessed data into cache...');
+  const startTime = Date.now();
+  
+  try {
+    // Preload settings (used everywhere)
+    const Setting = (await import('./models/Setting.js')).default;
+    const settings = await Setting.findOne({ key: 'general' });
+    if (settings) {
+      app.locals.settings = settings.value;
+      console.log('✅ Settings cached');
+    }
+    
+    // Preload business details (used for receipts)
+    const BusinessDetail = (await import('./models/BusinessDetail.js')).default;
+    const business = await BusinessDetail.findOne({ key: 'business-details' });
+    if (business) {
+      app.locals.businessDetails = business;
+      console.log('✅ Business details cached');
+    }
+    
+    // Preload categories (used for menu display)
+    const Category = (await import('./models/Category.js')).default;
+    const categories = await Category.find({ isActive: true }).lean();
+    app.locals.categories = categories;
+    console.log(`✅ ${categories.length} categories cached`);
+    
+    // Preload menu items (most critical for POS)
+    const MenuItem = (await import('./models/MenuItem.js')).default;
+    const menuItems = await MenuItem.find({ available: true }).lean().limit(50);
+    app.locals.menuItemsPreview = menuItems;
+    console.log(`✅ ${menuItems.length} menu items preview cached`);
+    
+  } catch (error) {
+    console.error('❌ Cache preload failed:', error.message);
+  }
+  
+  const duration = Date.now() - startTime;
+  console.log(`📦 Cache preload completed in ${duration}ms`);
+};
+
+// Create a middleware to serve from cache when available
+app.use((req, res, next) => {
+  // Add cache headers for static-like responses
+  if (req.path === '/api/menu' && req.method === 'GET' && app.locals.menuItemsPreview) {
+    // For menu requests, we can serve from cache while refreshing in background
+    // This is handled in the menu route, but we set a flag
+    req.fromCache = false;
+  }
+  next();
+});
+
+// ============================================
+// END OF DATABASE KEEP-ALIVE & WARM-UP SYSTEM
+// ============================================
+
 // Connect to MongoDB
 const connectWithRetry = async (retries = 5, delay = 5000) => {
   for (let i = 0; i < retries; i++) {
     try {
       await connectDB();
       console.log('✅ MongoDB connected successfully');
+      
+      // Start keep-alive after successful connection
+      setupDatabaseKeepAlive();
+      
+      // Warm up database after connection (delay a bit to let everything settle)
+      setTimeout(() => {
+        warmupDatabase();
+      }, 2000);
+      
+      // Preload cache after warm-up
+      setTimeout(() => {
+        preloadCache();
+      }, 5000);
+      
       return;
     } catch (error) {
       console.error(`MongoDB connection attempt ${i + 1} failed:`, error.message);
@@ -171,7 +326,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// Health check endpoint
+// Enhanced health check endpoint with detailed status
 app.get('/health', async (req, res) => {
   const dbState = mongoose.connection.readyState;
   const dbStatus = {
@@ -181,7 +336,7 @@ app.get('/health', async (req, res) => {
     3: 'disconnecting'
   }[dbState] || 'unknown';
   
-  res.status(200).json({ 
+  const response = { 
     status: 'healthy',
     timestamp: new Date(),
     uptime: process.uptime(),
@@ -189,8 +344,26 @@ app.get('/health', async (req, res) => {
     socketConnections: io?.sockets?.sockets?.size || 0,
     environment: process.env.NODE_ENV || 'development',
     version: '1.0.0',
-    pushNotifications: webPushInitialized
-  });
+    pushNotifications: webPushInitialized,
+    keepAlive: {
+      active: dbKeepAliveInterval !== null,
+      warmUpCompleted: dbWarmUpCompleted,
+      cacheLoaded: !!app.locals.settings
+    }
+  };
+  
+  // If MongoDB is connected, also ping it to ensure it's awake
+  if (dbState === 1) {
+    try {
+      await mongoose.connection.db.admin().command({ ping: 1 });
+      response.dbPing = 'successful';
+    } catch (error) {
+      response.dbPing = 'failed';
+      response.status = 'degraded';
+    }
+  }
+  
+  res.status(200).json(response);
 });
 
 // API Routes
@@ -229,7 +402,9 @@ app.get('/', (req, res) => {
       notifications: '/api/notifications'
     },
     features: {
-      pushNotifications: webPushInitialized
+      pushNotifications: webPushInitialized,
+      keepAlive: dbKeepAliveInterval !== null,
+      cacheEnabled: !!app.locals.settings
     },
     timestamp: new Date()
   });
@@ -263,9 +438,15 @@ app.use((err, req, res, next) => {
 // Socket.io setup
 setupSocketHandlers(io);
 
-// Graceful shutdown
+// Graceful shutdown - Clean up intervals
 const gracefulShutdown = async () => {
   console.log('Received shutdown signal, closing gracefully...');
+  
+  // Clear keep-alive interval
+  if (dbKeepAliveInterval) {
+    clearInterval(dbKeepAliveInterval);
+    dbKeepAliveInterval = null;
+  }
   
   if (io) {
     io.close(() => {
@@ -314,6 +495,7 @@ httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`📡 API URL: http://localhost:${PORT}/api`);
   console.log(`✅ CORS enabled for:`, allowedOrigins);
   console.log(`📢 Push notifications: ${webPushInitialized ? '✅ Enabled' : '⚠️ Disabled'}`);
+  console.log(`🔥 Database keep-alive: ${dbKeepAliveInterval ? 'ACTIVE' : 'PENDING'} (will start after DB connection)`);
 });
 
 export { app, httpServer, io, getIO };
