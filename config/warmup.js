@@ -23,12 +23,12 @@ export const warmupDatabase = async () => {
     
     // Run lightweight queries to warm up each collection
     const collections = [
-      { name: 'Menu Items', model: MenuItem, count: await MenuItem.estimatedDocumentCount() },
-      { name: 'Categories', model: Category, count: await Category.estimatedDocumentCount() },
-      { name: 'Orders', model: Order, count: await Order.estimatedDocumentCount() },
-      { name: 'Tables', model: Table, count: await Table.estimatedDocumentCount() },
-      { name: 'Settings', model: Setting, count: await Setting.estimatedDocumentCount() },
-      { name: 'Users', model: User, count: await User.estimatedDocumentCount() }
+      { name: 'Menu Items', model: MenuItem, count: await MenuItem.estimatedDocumentCount().catch(() => 0) },
+      { name: 'Categories', model: Category, count: await Category.estimatedDocumentCount().catch(() => 0) },
+      { name: 'Orders', model: Order, count: await Order.estimatedDocumentCount().catch(() => 0) },
+      { name: 'Tables', model: Table, count: await Table.estimatedDocumentCount().catch(() => 0) },
+      { name: 'Settings', model: Setting, count: await Setting.estimatedDocumentCount().catch(() => 0) },
+      { name: 'Users', model: User, count: await User.estimatedDocumentCount().catch(() => 0) }
     ];
     
     for (const collection of collections) {
@@ -51,7 +51,6 @@ export const warmupDatabase = async () => {
   }
 };
 
-// Function to preload cache
 export const preloadCache = async (app) => {
   console.log('📦 Preloading frequently accessed data into cache...');
   const startTime = Date.now();
