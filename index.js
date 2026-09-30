@@ -22,6 +22,7 @@ import businessRoutes from './routes/business.js';
 import customerRoutes from './routes/customers.js';
 import receiptRoutes from './routes/receipts.js';
 import notificationRoutes from './routes/notifications.js';
+import printJobRoutes from './routes/printJobs.js';
 import morgan from 'morgan';
 import { warmupDatabase, preloadCache, getWarmUpStatus } from './config/warmup.js';
 
@@ -233,6 +234,7 @@ app.use('/api/business', businessRoutes);
 app.use('/api/customers', customerRoutes);
 app.use('/api/receipts', receiptRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/print-jobs', printJobRoutes);
 
 // Root endpoint
 app.get('/', (req, res) => {
