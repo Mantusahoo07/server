@@ -5,9 +5,12 @@ import { authenticate } from '../middleware/auth.js';
 
 const router = express.Router();
 
-// ----------------------------------------------------------------
-// Helper: fetch the singleton printer host doc, creating if missing
-// ----------------------------------------------------------------
+// -----------------------------------------------------------------
+// Helpers
+// -----------------------------------------------------------------
+const HOST_TIMEOUT_MS = 30_000;   // host considered offline if no heartbeat
+const JOB_TIMEOUT_MS  = 30_000;   // jobs expire if not picked up
+
 async function getPrinterHost() {
   let doc = await PrinterHost.findOne({ key: 'active' });
   if (!doc) {
@@ -17,10 +20,24 @@ async function getPrinterHost() {
   return doc;
 }
 
-// ----------------------------------------------------------------
+function isHostOnline(doc) {
+  if (!doc || !doc.deviceId || !doc.lastSeenAt) return false;
+  return (Date.now() - new Date(doc.lastSeenAt).getTime()) < HOST_TIMEOUT_MS;
+}
+
+/** Sweep expired jobs — call before every fetch so the waiter sees failures fast. */
+async function sweepExpired() {
+  const cutoff = new Date(Date.now() - JOB_TIMEOUT_MS);
+  await PrintJob.updateMany(
+    { status: 'pending', createdAt: { $lt: cutoff } },
+    { $set: { status: 'expired', error: 'No printer host picked it up in time' } }
+  );
+}
+
+// -----------------------------------------------------------------
 // GET /api/print-jobs/printer-host
-// Who currently owns the printer?
-// ----------------------------------------------------------------
+// Who is the host and are they online?
+// -----------------------------------------------------------------
 router.get('/printer-host', authenticate, async (req, res) => {
   try {
     const doc = await getPrinterHost();
@@ -30,29 +47,24 @@ router.get('/printer-host', authenticate, async (req, res) => {
       enabledByName: doc.enabledByName,
       enabledAt:     doc.enabledAt,
       lastSeenAt:    doc.lastSeenAt,
-      jobsPrinted:   doc.jobsPrinted
+      jobsPrinted:   doc.jobsPrinted,
+      online:        isHostOnline(doc)
     });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ----------------------------------------------------------------
+// -----------------------------------------------------------------
 // POST /api/print-jobs/printer-host
-// Body: { deviceId, deviceName, enable: true|false }
-//
-// enable=true  → claims ownership (takes over from anyone else)
-// enable=false → releases ownership ONLY if the caller IS the current host
-// ----------------------------------------------------------------
+// enable=true  → claim host (kicks whoever was there)
+// enable=false → release only if we are the current host
+// -----------------------------------------------------------------
 router.post('/printer-host', authenticate, async (req, res) => {
   try {
     const { deviceId, deviceName, enable } = req.body;
     if (!deviceId) return res.status(400).json({ error: 'deviceId required' });
-
     const doc = await getPrinterHost();
 
     if (enable === true) {
-      // Claim host. Auto-kick whoever was there before.
       const previous = doc.deviceId;
       doc.deviceId      = deviceId;
       doc.deviceName    = deviceName || 'Unknown device';
@@ -63,34 +75,17 @@ router.post('/printer-host', authenticate, async (req, res) => {
       await doc.save();
 
       const io = req.app.get('io');
-      if (io) {
-        io.emit('printer-host-changed', {
-          deviceId: doc.deviceId,
-          deviceName: doc.deviceName,
-          previousDeviceId: previous
-        });
-      }
+      if (io) io.emit('printer-host-changed', { deviceId: doc.deviceId, previousDeviceId: previous });
       return res.json({ ok: true, host: doc });
     }
 
     if (enable === false) {
-      // Release only if we are the current host
       if (doc.deviceId !== deviceId) {
-        return res.status(409).json({
-          error: 'Another device is the printer host. Turn it off there first.',
-          currentHost: {
-            deviceId: doc.deviceId,
-            deviceName: doc.deviceName,
-            enabledByName: doc.enabledByName
-          }
-        });
+        return res.status(409).json({ error: 'Another device is the printer host.' });
       }
-      doc.deviceId      = null;
-      doc.deviceName    = null;
-      doc.enabledBy     = null;
-      doc.enabledByName = null;
-      doc.enabledAt     = null;
-      doc.lastSeenAt    = null;
+      doc.deviceId = null; doc.deviceName = null;
+      doc.enabledBy = null; doc.enabledByName = null;
+      doc.enabledAt = null; doc.lastSeenAt = null;
       await doc.save();
 
       const io = req.app.get('io');
@@ -98,16 +93,13 @@ router.post('/printer-host', authenticate, async (req, res) => {
       return res.json({ ok: true, host: doc });
     }
 
-    return res.status(400).json({ error: 'enable must be true or false' });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+    res.status(400).json({ error: 'enable must be true or false' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ----------------------------------------------------------------
+// -----------------------------------------------------------------
 // POST /api/print-jobs/printer-host/heartbeat
-// Host calls this every few seconds so we know it's alive.
-// ----------------------------------------------------------------
+// -----------------------------------------------------------------
 router.post('/printer-host/heartbeat', authenticate, async (req, res) => {
   try {
     const { deviceId } = req.body;
@@ -115,17 +107,16 @@ router.post('/printer-host/heartbeat', authenticate, async (req, res) => {
     if (doc.deviceId && doc.deviceId === deviceId) {
       doc.lastSeenAt = new Date();
       await doc.save();
+      return res.json({ ok: true, online: true });
     }
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+    res.json({ ok: true, online: false });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ----------------------------------------------------------------
-// POST /api/print-jobs
-// Any device enqueues a print. The current host will pick it up.
-// ----------------------------------------------------------------
+// -----------------------------------------------------------------
+// POST /api/print-jobs — enqueue
+// Assigns targetHostId = current host. Fails fast if no host online.
+// -----------------------------------------------------------------
 router.post('/', authenticate, async (req, res) => {
   try {
     const { receiptData, paperWidth, requestedByName } = req.body;
@@ -133,56 +124,58 @@ router.post('/', authenticate, async (req, res) => {
       return res.status(400).json({ error: 'receiptData is required' });
     }
 
+    const host = await getPrinterHost();
+    if (!host.deviceId || !isHostOnline(host)) {
+      return res.status(503).json({
+        error: 'No printer host is online. Turn on the printer host device.'
+      });
+    }
+
     const job = new PrintJob({
       receiptData,
       paperWidth: paperWidth || 58,
       requestedBy: req.userId,
-      requestedByName: requestedByName || null
+      requestedByName: requestedByName || null,
+      targetHostId: host.deviceId
     });
     await job.save();
 
-    console.log(`🖨️  Print job queued: ${job._id}`);
+    console.log(`🖨️  Print job queued: ${job._id} → host ${host.deviceId}`);
 
     const io = req.app.get('io');
-    if (io) io.emit('print-job-queued', { jobId: job._id.toString() });
+    if (io) io.emit('print-job-queued', { jobId: job._id.toString(), targetHostId: host.deviceId });
 
     res.status(201).json(job);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ----------------------------------------------------------------
+// -----------------------------------------------------------------
 // GET /api/print-jobs/pending?deviceId=XXX
-// Only the current host is allowed to fetch pending jobs.
-// ----------------------------------------------------------------
+// Only the current host fetches; only jobs targeted at it are returned.
+// -----------------------------------------------------------------
 router.get('/pending', authenticate, async (req, res) => {
   try {
+    await sweepExpired();
     const { deviceId } = req.query;
     const host = await getPrinterHost();
     if (host.deviceId !== deviceId) {
       return res.status(403).json({ error: 'This device is not the printer host' });
     }
-
-    // Refresh heartbeat since the host just polled
     host.lastSeenAt = new Date();
     await host.save();
 
-    const jobs = await PrintJob
-      .find({ status: 'pending' })
-      .sort({ createdAt: 1 })
-      .limit(10);
+    const jobs = await PrintJob.find({
+      status: 'pending',
+      targetHostId: deviceId
+    }).sort({ createdAt: 1 }).limit(10);
 
     res.json(jobs);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ----------------------------------------------------------------
+// -----------------------------------------------------------------
 // PATCH /api/print-jobs/:id/status
-// Host reports printing / done / failed
-// ----------------------------------------------------------------
+// -----------------------------------------------------------------
 router.patch('/:id/status', authenticate, async (req, res) => {
   try {
     const { status, deviceId, error } = req.body;
@@ -213,39 +206,56 @@ router.patch('/:id/status', authenticate, async (req, res) => {
       await host.save();
     }
 
-    console.log(`🖨️  Print job ${job._id} → ${status}`);
+    console.log(`🖨️  Job ${job._id} → ${status}`);
 
     const io = req.app.get('io');
     if (io) io.emit('print-job-updated', { jobId: job._id.toString(), status });
 
     res.json(job);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ----------------------------------------------------------------
+// -----------------------------------------------------------------
 // GET /api/print-jobs/recent
-// ----------------------------------------------------------------
+// -----------------------------------------------------------------
 router.get('/recent', authenticate, async (req, res) => {
   try {
+    await sweepExpired();
     const jobs = await PrintJob.find({}).sort({ createdAt: -1 }).limit(20);
     res.json(jobs);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ----------------------------------------------------------------
-// DELETE /api/print-jobs/clear
-// ----------------------------------------------------------------
+// -----------------------------------------------------------------
+// GET /api/print-jobs/my-last?deviceId=XXX
+// Poll to check the fate of the last job — used by non-host devices
+// to show "printed!" or "printer offline" after tapping PRINT.
+// -----------------------------------------------------------------
+router.get('/my-last', authenticate, async (req, res) => {
+  try {
+    await sweepExpired();
+    const job = await PrintJob.findOne({ requestedBy: req.userId })
+      .sort({ createdAt: -1 });
+    if (!job) return res.json(null);
+    res.json({
+      id: job._id,
+      status: job.status,
+      error: job.error,
+      createdAt: job.createdAt
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// -----------------------------------------------------------------
+// DELETE /api/print-jobs/clear — clean old jobs
+// -----------------------------------------------------------------
 router.delete('/clear', authenticate, async (req, res) => {
   try {
-    const result = await PrintJob.deleteMany({ status: { $in: ['done', 'failed'] } });
+    const result = await PrintJob.deleteMany({
+      status: { $in: ['done', 'failed', 'expired'] }
+    });
     res.json({ deleted: result.deletedCount });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 export default router;
