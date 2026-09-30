@@ -209,6 +209,17 @@ app.get('/health', async (req, res) => {
 });
 
 // API Routes
+// ---------- /api/ping ----------
+// Lightweight keep-alive + health-check. Never touches MongoDB.
+// UptimeRobot pings this every 5 min so Render never sleeps.
+app.get('/api/ping', (req, res) => {
+  res.status(200).json({
+    ok: true,
+    ts: Date.now(),
+    uptime: process.uptime()
+  });
+});
+
 app.use('/api/auth', authRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/menu', menuRoutes);
