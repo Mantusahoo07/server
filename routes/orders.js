@@ -421,7 +421,13 @@ router.post('/', authenticate, async (req, res) => {
       }
       
       // Check if table has an active session (running orders)
-      if (table.status === 'running' && table.currentSessionId && table.baseOrderNumber) {
+      // forceNewSession lets the waiter app open a SEPARATE bill on the same
+      // table (two parties sharing a table, want to pay separately).
+      // When true, we skip the "join running order" branch entirely and
+      // create a brand-new baseOrderNumber for this order.
+      const forceNewSession = orderData.forceNewSession === true;
+
+      if (!forceNewSession && table.status === 'running' && table.currentSessionId && table.baseOrderNumber) {
         // Additional order for existing table session
         tableSessionId = table.currentSessionId;
         isAdditionalOrder = true;
@@ -457,6 +463,9 @@ router.post('/', authenticate, async (req, res) => {
     
     const displayOrderNumber = runningNumber === 0 ? `${baseOrderNumber}` : `${baseOrderNumber}-${runningNumber}`;
     
+    // Remove client-only fields that aren't in the schema
+    delete orderData.forceNewSession;
+
     // Create order
     const order = new Order({
       ...orderData,
