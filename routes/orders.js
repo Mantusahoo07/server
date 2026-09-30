@@ -909,11 +909,7 @@ router.post('/table/:tableNumber/complete-billing', authenticate, async (req, re
       'payment.status': { $ne: 'paid' }
     });
     
-    if (activeOrders.length === 0) {
-      return res.status(404).json({ error: 'No active orders found for this table' });
-    }
-    
-    // Complete all active orders
+    // Complete all active orders (may be zero — we still reset the table)
     for (const order of activeOrders) {
       order.status = 'completed';
       order.completedAt = new Date();
@@ -922,7 +918,7 @@ router.post('/table/:tableNumber/complete-billing', authenticate, async (req, re
       await order.save();
     }
     
-    // RESET TABLE - Clear session and base order number
+    // RESET TABLE — always, even if there were no active orders.
     const table = await Table.findOne({ tableNumber: tableNumber });
     if (table) {
       table.status = 'available';
@@ -951,6 +947,58 @@ router.post('/table/:tableNumber/complete-billing', authenticate, async (req, re
     });
   } catch (error) {
     console.error('Error completing table billing:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// FORCE RESET a table — clears stale session/count regardless of order state.
+// Safe to call any time; useful when orders were deleted directly from DB.
+router.post('/table/:tableNumber/reset', authenticate, async (req, res) => {
+  try {
+    const tableNumber = parseInt(req.params.tableNumber);
+    const table = await Table.findOne({ tableNumber });
+    if (!table) {
+      return res.status(404).json({ error: 'Table not found' });
+    }
+    table.status = 'available';
+    table.currentSessionId = null;
+    table.baseOrderNumber = null;
+    table.runningOrderCount = 0;
+    await table.save();
+    
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('table-status-changed', {
+        tableNumber,
+        status: 'available',
+        runningOrderCount: 0,
+        reset: true
+      });
+    }
+    
+    console.log(`🧹 Table ${tableNumber} force-reset by ${req.userId}`);
+    res.json({ message: `Table ${tableNumber} reset`, table });
+  } catch (error) {
+    console.error('Error resetting table:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// FORCE RESET ALL tables — for one-time cleanup when state got out of sync.
+router.post('/tables/reset-all', authenticate, async (req, res) => {
+  try {
+    const result = await Table.updateMany({}, {
+      $set: {
+        status: 'available',
+        currentSessionId: null,
+        baseOrderNumber: null,
+        runningOrderCount: 0
+      }
+    });
+    console.log(`🧹 All tables reset by ${req.userId} — matched ${result.matchedCount}`);
+    res.json({ message: 'All tables reset', matched: result.matchedCount, modified: result.modifiedCount });
+  } catch (error) {
+    console.error('Error resetting all tables:', error);
     res.status(500).json({ error: error.message });
   }
 });
