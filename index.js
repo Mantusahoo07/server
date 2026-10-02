@@ -8,7 +8,7 @@ import dotenv from 'dotenv';
 import mongoose from 'mongoose';
 import webpush from 'web-push';
 import connectDB from './config/database.js';
-import { setupSocketHandlers, getIO } from './socket.js';
+import { setupSocketHandlers, getIO, getOnlineDevices } from './socket.js';
 import authRoutes from './routes/auth.js';
 import orderRoutes from './routes/orders.js';
 import menuRoutes from './routes/menu.js';
@@ -219,6 +219,22 @@ app.get('/api/ping', (req, res) => {
     ts: Date.now(),
     uptime: process.uptime()
   });
+});
+
+// ---------- /api/online ----------
+// Returns the list of devices that have sent a heartbeat in the last 10 seconds.
+app.get('/api/online', (req, res) => {
+  try {
+    const devices = getOnlineDevices();
+    res.json({
+      ok: true,
+      ts: Date.now(),
+      count: devices.length,
+      devices
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 app.use('/api/auth', authRoutes);
