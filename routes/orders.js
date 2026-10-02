@@ -714,51 +714,55 @@ router.patch('/:id/items/:itemId', authenticate, async (req, res) => {
 router.patch('/:id/status', authenticate, async (req, res) => {
   try {
     const { status, deliveryPlatform } = req.body;
-    const updateData = { 
-      status, 
-      updatedAt: new Date() 
+    const updateData = {
+      status,
+      updatedAt: new Date()
     };
-    
-    // If delivery platform is provided, update it
+
     if (deliveryPlatform !== undefined && deliveryPlatform !== null) {
       updateData.deliveryPlatform = deliveryPlatform;
     }
-    
+
     if (status === 'completed') {
       updateData.completedAt = new Date();
       updateData.completedBy = req.userId;
     }
-    
+
     if (status === 'accepted') {
       updateData.acceptedBy = req.userId;
     }
-    
+
     const order = await Order.findByIdAndUpdate(
       req.params.id,
       updateData,
       { new: true }
     );
-    
+
     if (!order) {
       return res.status(404).json({ error: 'Order not found' });
     }
-    
+
+    // FAST PATH: emit + respond immediately, push in background
     const io = req.app.get('io');
     if (io) {
       io.emit('order-updated', order);
       if (status === 'accepted') io.emit('order-accepted', order._id);
-      if (status === 'ready_for_billing') {
-        io.emit('order-ready-for-billing', order._id);
-        await notifyOrderReady(order);
-      }
+      if (status === 'ready_for_billing') io.emit('order-ready-for-billing', order._id);
       if (status === 'completed') io.emit('order-completed', order._id);
-      
+    }
+
+    res.json(order);
+
+    // Background: table status sync + push notifications
+    if (io) {
+      if (status === 'ready_for_billing') {
+        notifyOrderReady(order).catch(e => console.warn('notifyOrderReady failed:', e.message));
+      }
       if ((status === 'cancelled' || status === 'completed') && order.tableNumber) {
-        await updateTableStatusFromOrders(order.tableNumber, io);
+        updateTableStatusFromOrders(order.tableNumber, io)
+          .catch(e => console.warn('updateTableStatus failed:', e.message));
       }
     }
-    
-    res.json(order);
   } catch (error) {
     console.error('Error updating order status:', error);
     res.status(500).json({ error: error.message });
@@ -770,35 +774,44 @@ router.patch('/:id/items/:itemId/status', authenticate, async (req, res) => {
   try {
     const { status } = req.body;
     const order = await Order.findById(req.params.id);
-    
+
     if (!order) {
       return res.status(404).json({ error: 'Order not found' });
     }
-    
+
     const item = order.items.find(i => i.id === req.params.itemId);
     if (!item) {
       return res.status(404).json({ error: 'Item not found' });
     }
-    
+
     const oldStatus = item.status;
     item.status = status;
     if (status === 'completed') {
       item.completedAt = new Date();
     }
-    
+
     await order.save();
-    
+
+    // FAST PATH: emit events + respond immediately, push notification in background
     const io = req.app.get('io');
     if (io) {
+      io.emit('item-status-updated', {
+        orderId: order._id,
+        itemId: req.params.itemId,
+        status,
+        oldStatus
+      });
       io.emit('order-updated', order);
-      io.emit('item-status-updated', { orderId: order._id, itemId: req.params.itemId, status, oldStatus });
-      
-      if (status === 'completed' && oldStatus !== 'completed') {
-        await notifyKitchenOrderModified(order, order.isRunningOrder);
-      }
     }
-    
+
     res.json(order);
+
+    // Fire-and-forget push dispatch
+    if (status === 'completed' && oldStatus !== 'completed') {
+      notifyKitchenOrderModified(order, order.isRunningOrder).catch(err => {
+        console.warn('notifyKitchenOrderModified failed (non-fatal):', err.message);
+      });
+    }
   } catch (error) {
     console.error('Error updating item status:', error);
     res.status(500).json({ error: error.message });
