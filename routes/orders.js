@@ -770,6 +770,45 @@ router.patch('/:id/status', authenticate, async (req, res) => {
 });
 
 // Update item status
+// ---- BULK: mark entire order ready ----
+// One round-trip: completes all active items AND sets order status.
+// Called from Kitchen "Mark Ready" button. Previously the client sent N+1
+// separate requests (one per item + one for status), which was slow on
+// orders with many items.
+router.patch('/:id/mark-ready', authenticate, async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.id);
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    const now = new Date();
+    let completedCount = 0;
+    order.items.forEach(item => {
+      if (!item.isRemoved && item.status !== 'cancelled' && item.status !== 'completed') {
+        item.status = 'completed';
+        item.completedAt = now;
+        completedCount++;
+      }
+    });
+    order.status = 'ready_for_billing';
+    order.updatedAt = now;
+
+    await order.save();
+
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('order-updated', order);
+      io.emit('order-ready-for-billing', order._id);
+    }
+
+    res.json({ order, completedCount });
+  } catch (error) {
+    console.error('Error marking order ready:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.patch('/:id/items/:itemId/status', authenticate, async (req, res) => {
   try {
     const { status } = req.body;
